@@ -115,7 +115,7 @@ def generate_launch_description():
                 output="screen",
                 parameters=[
                     {
-                        "use_static_map": True,
+                        "use_static_map": False,
                         "static_map_yaml": nav_map_yaml,
                         "dynamic_obstacle_timeout": 0.8,
                     }
