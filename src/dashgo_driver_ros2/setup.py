@@ -26,6 +26,10 @@ setup(
             f"share/{package_name}/config",
             ["config/my_dashgo_params.yaml"],
         ),
+        (
+            f"share/{package_name}/urdf",
+            ["urdf/dashgo_visual.urdf"],
+        ),
     ],
     install_requires=["setuptools", "pyserial"],
     zip_safe=True,

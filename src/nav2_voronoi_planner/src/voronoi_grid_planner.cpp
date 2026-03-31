@@ -631,9 +631,12 @@ bool VoronoiGridPlanner::makePlanFromMap(
 
   const double start_goal_dist = std::hypot(
     static_cast<double>(goal_x - start_x),
-    static_cast<double>(goal_y - start_y));
+    static_cast<double>(goal_y - start_y)) * resolution;
 
-  if (start_goal_dist < 6.0 && lineOfSightFree(start_x, start_y, goal_x, goal_y, map)) {
+  if (
+    start_goal_dist < config_.direct_connect_distance &&
+    lineOfSightFree(start_x, start_y, goal_x, goal_y, map))
+  {
     PopulateGridPath({start_grid, goal_grid}, plan.header, resolution, origin_x, origin_y, plan);
     if (!plan.poses.empty()) {
       plan.poses.back() = goal;

@@ -24,6 +24,7 @@ public:
     int occ_threshold {50};
     bool unknown_is_obstacle {true};
     double trunk_safety_penalty_scale {0.06};
+    double direct_connect_distance {0.60};
   };
 
   explicit VoronoiGridPlanner(Config config);

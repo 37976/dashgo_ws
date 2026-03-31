@@ -25,6 +25,7 @@ class ObstacleGridNode(Node):
         self.declare_parameter('obstacle_radius', 0.2)
         self.declare_parameter('projection_gap_fill_cells', 2)
         self.declare_parameter('dynamic_obstacle_timeout', 0.8)
+        self.declare_parameter('accumulate_pointcloud_obstacles', False)
 
         # 新增：静态地图参数
         self.declare_parameter('use_static_map', True)
@@ -40,6 +41,8 @@ class ObstacleGridNode(Node):
             'projection_gap_fill_cells').get_parameter_value().integer_value
         self.dynamic_obstacle_timeout = self.get_parameter(
             'dynamic_obstacle_timeout').get_parameter_value().double_value
+        self.accumulate_pointcloud_obstacles = self.get_parameter(
+            'accumulate_pointcloud_obstacles').get_parameter_value().bool_value
 
         self.use_static_map = self.get_parameter('use_static_map').get_parameter_value().bool_value
         self.static_map_yaml = self.get_parameter('static_map_yaml').get_parameter_value().string_value
@@ -106,7 +109,7 @@ class ObstacleGridNode(Node):
         if self.last_pointcloud_time is not None:
             elapsed = (
                 self.get_clock().now() - self.last_pointcloud_time).nanoseconds / 1e9
-            if elapsed > self.dynamic_obstacle_timeout and (
+            if (not self.accumulate_pointcloud_obstacles) and elapsed > self.dynamic_obstacle_timeout and (
                 self.pointcloud_obstacles or self.pointcloud_dilated_obstacles_layer1 or
                 self.pointcloud_dilated_obstacles_layer2 or self.pointcloud_dilated_obstacles_layer3
             ):
@@ -240,11 +243,23 @@ class ObstacleGridNode(Node):
 
         points = pc2.read_points(msg, field_names=("x", "y", "z"), skip_nans=True)
         (
-            self.pointcloud_obstacles,
-            self.pointcloud_dilated_obstacles_layer1,
-            self.pointcloud_dilated_obstacles_layer2,
-            self.pointcloud_dilated_obstacles_layer3,
+            new_obstacles,
+            new_dilated_obstacles_layer1,
+            new_dilated_obstacles_layer2,
+            new_dilated_obstacles_layer3,
         ) = self.build_obstacle_layers(points)
+
+        if self.accumulate_pointcloud_obstacles:
+            self.pointcloud_obstacles |= new_obstacles
+            self.pointcloud_dilated_obstacles_layer1 |= new_dilated_obstacles_layer1
+            self.pointcloud_dilated_obstacles_layer2 |= new_dilated_obstacles_layer2
+            self.pointcloud_dilated_obstacles_layer3 |= new_dilated_obstacles_layer3
+        else:
+            self.pointcloud_obstacles = new_obstacles
+            self.pointcloud_dilated_obstacles_layer1 = new_dilated_obstacles_layer1
+            self.pointcloud_dilated_obstacles_layer2 = new_dilated_obstacles_layer2
+            self.pointcloud_dilated_obstacles_layer3 = new_dilated_obstacles_layer3
+
         self.last_pointcloud_time = self.get_clock().now()
         self.refresh_dynamic_layers()
         self.update_combined_grid()

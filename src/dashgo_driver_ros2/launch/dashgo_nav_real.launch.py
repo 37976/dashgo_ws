@@ -14,14 +14,18 @@ def generate_launch_description():
     nav_share_dir = get_package_share_directory("nav_slam")
     default_nav_map = os.path.join(nav_share_dir, "map", "gpt.yaml")
     default_nav_rviz = os.path.join(nav_share_dir, "config", "rviz.rviz")
+    default_robot_urdf = os.path.join(driver_share, "urdf", "dashgo_visual.urdf")
 
     robot_launch = os.path.join(driver_share, "launch", "dashgo_robot.launch.py")
+    with open(default_robot_urdf, "r", encoding="utf-8") as urdf_file:
+        robot_description = urdf_file.read()
 
     start_robot = LaunchConfiguration("start_robot")
     start_nav = LaunchConfiguration("start_nav")
     start_nav_rviz = LaunchConfiguration("start_nav_rviz")
     start_lidar = LaunchConfiguration("start_lidar")
     start_d435 = LaunchConfiguration("start_d435")
+    publish_robot_model = LaunchConfiguration("publish_robot_model")
     driver_port = LaunchConfiguration("driver_port")
     lidar_port = LaunchConfiguration("lidar_port")
     nav_map_yaml = LaunchConfiguration("nav_map_yaml")
@@ -29,6 +33,7 @@ def generate_launch_description():
     laser_frame = LaunchConfiguration("laser_frame")
     laser_z = LaunchConfiguration("laser_z")
     points_frame = LaunchConfiguration("points_frame")
+    scan_min_range = LaunchConfiguration("scan_min_range")
 
     return LaunchDescription(
         [
@@ -37,6 +42,7 @@ def generate_launch_description():
             DeclareLaunchArgument("start_nav_rviz", default_value="true"),
             DeclareLaunchArgument("start_lidar", default_value="true"),
             DeclareLaunchArgument("start_d435", default_value="false"),
+            DeclareLaunchArgument("publish_robot_model", default_value="true"),
             DeclareLaunchArgument("driver_port", default_value="/dev/ttyUSB0"),
             DeclareLaunchArgument(
                 "lidar_port",
@@ -49,8 +55,9 @@ def generate_launch_description():
             DeclareLaunchArgument("nav_map_yaml", default_value=default_nav_map),
             DeclareLaunchArgument("base_frame", default_value="base_footprint"),
             DeclareLaunchArgument("laser_frame", default_value="laser"),
-            DeclareLaunchArgument("laser_z", default_value="0.18"),
+            DeclareLaunchArgument("laser_z", default_value="0.52"),
             DeclareLaunchArgument("points_frame", default_value="base_link"),
+            DeclareLaunchArgument("scan_min_range", default_value="0.30"),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(robot_launch),
                 condition=IfCondition(start_robot),
@@ -65,21 +72,21 @@ def generate_launch_description():
                     "base_frame": base_frame,
                     "laser_frame": laser_frame,
                     "laser_z": laser_z,
+                    "publish_laser_tf": "false",
+                    "publish_sonar_tf": "false",
                 }.items(),
             ),
             Node(
-                package="tf2_ros",
-                executable="static_transform_publisher",
-                name="base_footprint_to_base_link",
-                arguments=[
-                    "--x", "0.0",
-                    "--y", "0.0",
-                    "--z", "0.0",
-                    "--roll", "0.0",
-                    "--pitch", "0.0",
-                    "--yaw", "0.0",
-                    "--frame-id", base_frame,
-                    "--child-frame-id", "base_link",
+                package="robot_state_publisher",
+                executable="robot_state_publisher",
+                name="robot_state_publisher",
+                condition=IfCondition(publish_robot_model),
+                output="screen",
+                parameters=[
+                    {
+                        "robot_description": robot_description,
+                        "publish_frequency": 30.0,
+                    }
                 ],
             ),
             Node(
@@ -91,11 +98,13 @@ def generate_launch_description():
                 parameters=[
                     {
                         "scan_topic": "/scan",
+                        "filtered_scan_topic": "/scan_filtered",
                         "points_topic": "/points_raw",
                         "output_frame": points_frame,
                         "laser_height": laser_z,
                         "x_offset": 0.0,
                         "y_offset": 0.0,
+                        "min_valid_range": scan_min_range,
                     }
                 ],
             ),
@@ -105,7 +114,12 @@ def generate_launch_description():
                 name="voronoi",
                 condition=IfCondition(start_nav),
                 output="screen",
-                parameters=[{"trunk_safety_penalty_scale": 0.06}],
+                parameters=[
+                    {
+                        "trunk_safety_penalty_scale": 0.06,
+                        "direct_connect_distance": 0.60,
+                    }
+                ],
             ),
             Node(
                 package="nav_slam",
@@ -117,7 +131,15 @@ def generate_launch_description():
                     {
                         "use_static_map": False,
                         "static_map_yaml": nav_map_yaml,
+                        "grid_width": 40.0,
+                        "grid_height": 40.0,
+                        "resolution": 0.05,
                         "dynamic_obstacle_timeout": 0.8,
+                        "accumulate_pointcloud_obstacles": False,
+                        "min_height": 0.0,
+                        "max_height": 1.0,
+                        "obstacle_radius": 0.08,
+                        "projection_gap_fill_cells": 1,
                     }
                 ],
             ),

@@ -81,12 +81,7 @@ Visualization Manager:
           Show Axes: false
           Show Trail: false
           Value: true
-        gps_link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        imu_link:
+        laser:
           Alpha: 1
           Show Axes: false
           Show Trail: false
@@ -96,17 +91,7 @@ Visualization Manager:
           Show Axes: false
           Show Trail: false
           Value: true
-        navsat_link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
         right_wheel_link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        velodyne:
           Alpha: 1
           Show Axes: false
           Show Trail: false
@@ -182,9 +167,9 @@ Visualization Manager:
       Name: PointCloud2
       Position Transformer: XYZ
       Selectable: true
-      Size (Pixels): 3
-      Size (m): 0.10000000149011612
-      Style: Squares
+      Size (Pixels): 2
+      Size (m): 0.029999999329447746
+      Style: Flat Squares
       Topic:
         Depth: 5
         Durability Policy: Volatile
