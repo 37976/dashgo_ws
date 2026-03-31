@@ -62,7 +62,7 @@ sudo systemctl mask brltty.service brltty-udev.service
 ### 3. 编译工作区
 
 ```bash
-cd /home/xu/project/dashgo_ws
+cd ~/dashgo_ws
 source /opt/ros/humble/setup.bash
 colcon build
 source install/setup.bash
@@ -71,7 +71,7 @@ source install/setup.bash
 ## 常用环境命令
 
 ```bash
-cd /home/xu/project/dashgo_ws
+cd ~/dashgo_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 export ROS_LOG_DIR=/tmp/roslogs
@@ -82,7 +82,7 @@ export ROS_LOG_DIR=/tmp/roslogs
 ### 底盘单独启动
 
 ```bash
-cd /home/xu/project/dashgo_ws
+cd ~/dashgo_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 run dashgo_driver_ros2 dashgo_driver_node --ros-args -p port:=/dev/ttyUSB0 -p baud:=115200
@@ -91,7 +91,7 @@ ros2 run dashgo_driver_ros2 dashgo_driver_node --ros-args -p port:=/dev/ttyUSB0 
 ### 雷达单独启动
 
 ```bash
-cd /home/xu/project/dashgo_ws
+cd ~/dashgo_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 launch dashgo_lidar_ros2 rplidar_s2.launch.py
@@ -100,7 +100,7 @@ ros2 launch dashgo_lidar_ros2 rplidar_s2.launch.py
 ### 底盘 + 雷达 + 相机
 
 ```bash
-cd /home/xu/project/dashgo_ws
+cd ~/dashgo_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 export ROS_LOG_DIR=/tmp/roslogs
@@ -110,7 +110,7 @@ ros2 launch dashgo_driver_ros2 dashgo_robot.launch.py
 ### 底盘 + 雷达
 
 ```bash
-cd /home/xu/project/dashgo_ws
+cd ~/dashgo_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 export ROS_LOG_DIR=/tmp/roslogs
@@ -120,7 +120,7 @@ ros2 launch dashgo_driver_ros2 dashgo_robot.launch.py start_d435:=false
 ### 真机导航
 
 ```bash
-cd /home/xu/project/dashgo_ws
+cd ~/dashgo_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 export ROS_LOG_DIR=/tmp/roslogs
@@ -130,7 +130,7 @@ ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py
 ### 真机导航，不启动相机
 
 ```bash
-cd /home/xu/project/dashgo_ws
+cd ~/dashgo_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 export ROS_LOG_DIR=/tmp/roslogs
@@ -140,7 +140,7 @@ ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py start_d435:=false
 ### 真机导航，不启动 RViz
 
 ```bash
-cd /home/xu/project/dashgo_ws
+cd ~/dashgo_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 export ROS_LOG_DIR=/tmp/roslogs
