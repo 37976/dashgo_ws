@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>dashgo_lidar_ros2</name>
+  <version>0.1.0</version>
+  <description>ROS 2 lidar wrapper package for Dashgo using SLAMTEC sllidar_ros2.</description>
+
+  <maintainer email="xu@example.com">xu</maintainer>
+  <license>BSD-2-Clause</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>sllidar_ros2</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

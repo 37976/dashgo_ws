@@ -1,0 +1,8 @@
+sllidar_node:
+  ros__parameters:
+    channel_type: serial
+    serial_port: /dev/serial/by-id/usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_d8a678826473ed11a4766aeefdf7b791-if00-port0
+    serial_baudrate: 1000000
+    frame_id: laser
+    inverted: true
+    angle_compensate: true

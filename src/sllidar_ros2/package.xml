@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>sllidar_ros2</name>
+  <version>1.10.0</version>
+  <description>ROS 2 lidar driver package for SLAMTEC RPLIDAR devices.</description>
+
+  <maintainer email="xu@example.com">xu</maintainer>
+  <license>BSD-2-Clause</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_srvs</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
