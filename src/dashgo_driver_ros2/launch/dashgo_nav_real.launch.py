@@ -116,6 +116,8 @@ def generate_launch_description():
                 output="screen",
                 parameters=[
                     {
+                        "robot_radius": 0.20,
+                        "occ_threshold": 15,
                         "trunk_safety_penalty_scale": 0.06,
                         "direct_connect_distance": 0.60,
                     }
@@ -138,7 +140,7 @@ def generate_launch_description():
                         "accumulate_pointcloud_obstacles": False,
                         "min_height": 0.0,
                         "max_height": 1.0,
-                        "obstacle_radius": 0.08,
+                        "obstacle_radius": 0.20,
                         "projection_gap_fill_cells": 1,
                     }
                 ],
