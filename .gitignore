@@ -4,6 +4,7 @@ log/
 __pycache__/
 *.pyc
 .codex
+.vscode
 sync.sh
 src/sllidar_ros2/sdk/build/
 src/sllidar_ros2/sdk/devel/
