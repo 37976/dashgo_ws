@@ -215,6 +215,10 @@ class WebControlNode(Node):
         msg.angular.z = max(-self.angular_limit, min(self.angular_limit, float(angular)))
         self.cmd_pub.publish(msg)
 
+    def is_manual_mode(self):
+        with self.state_lock:
+            return self.control_mode == "manual"
+
     def stop_robot(self):
         self.publish_cmd_vel(0.0, 0.0)
         self.last_cmd_active = False
@@ -521,6 +525,12 @@ class WebControlNode(Node):
                     return
 
                 if parsed.path == "/api/cmd_vel":
+                    if not node.is_manual_mode():
+                        self.send_json(
+                            {"ok": False, "message": "manual mode required"},
+                            status=HTTPStatus.CONFLICT,
+                        )
+                        return
                     linear = float(payload.get("linear", 0.0))
                     angular = float(payload.get("angular", 0.0))
                     node.publish_cmd_vel(linear, angular)

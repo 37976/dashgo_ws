@@ -18,7 +18,7 @@
           <div class="status-strip">
             <div class="status-chip mode-chip">
               <span class="status-dot mode-dot" id="mode-dot"></span>
-              <span id="mode-text">模式 --</span>
+              <span id="mode-text">--</span>
             </div>
             <div class="status-chip">
               <span class="status-dot" id="radar-dot"></span>
@@ -38,51 +38,36 @@
       </header>
 
       <main class="content">
-        <section class="panel map-panel">
+        <section class="panel mode-shell">
           <div class="panel-title compact-title">
-            <span>地图与导航</span>
-            <button id="refresh-map-button" class="ghost-button">刷新地图</button>
-          </div>
-          <canvas id="map-canvas" width="900" height="900"></canvas>
-          <p class="hint">
-            地图操作：点按并拖动设置目标朝向，松开后发送导航目标。
-          </p>
-        </section>
-
-        <section class="panel side-panel">
-          <div class="panel-title compact-title">
-            <span>实时控制</span>
-          </div>
-
-          <div class="mode-switch">
-            <button id="manual-mode-button" class="mode-button">手动模式</button>
-            <button id="nav-mode-button" class="mode-button active">导航模式</button>
-          </div>
-
-          <div class="camera-card">
-            <div class="camera-title">
-              <span>前视画面</span>
-              <span id="camera-status" class="camera-status">等待相机</span>
+            <span id="page-title">导航页面</span>
+            <div class="mode-switch">
+              <button id="nav-mode-button" class="mode-button active">导航模式</button>
+              <button id="manual-mode-button" class="mode-button">手动模式</button>
             </div>
-            <img id="camera-frame" class="camera-frame" alt="D435 camera stream">
           </div>
 
-          <div class="remote-layout">
-            <div class="joystick-card">
-              <div id="joystick-base" class="joystick-base">
-                <div id="joystick-knob" class="joystick-knob"></div>
-              </div>
-              <p class="hint">按住摇杆拖动控制底盘，松手自动停车。</p>
-            </div>
+          <div class="orientation-note">
+            建议手机横屏使用，这样当前模式页里的核心功能基本都能放进同一屏。
+          </div>
 
-            <div class="stats-grid">
+          <section id="nav-page" class="mode-page active">
+            <div class="map-header-actions">
+              <button id="zoom-out-button" class="ghost-button">缩小</button>
+              <button id="zoom-in-button" class="ghost-button">放大</button>
+              <button id="fit-map-button" class="ghost-button">居中</button>
+              <button id="refresh-map-button" class="ghost-button">刷新地图</button>
+            </div>
+            <canvas id="map-canvas" width="900" height="900"></canvas>
+            <div class="map-goal-bar">
+              <button id="pick-goal-button" class="secondary-button">选点导航</button>
+              <button id="clear-goal-button" class="ghost-button">清除候选</button>
+              <button id="confirm-goal-button" class="primary-button" disabled>确认导航</button>
+            </div>
+            <div class="stats-grid nav-stats">
               <div class="stat-card">
                 <label>机器人位置</label>
                 <strong id="pose-text">--</strong>
-              </div>
-              <div class="stat-card">
-                <label>速度</label>
-                <strong id="velocity-text">--</strong>
               </div>
               <div class="stat-card">
                 <label>地图状态</label>
@@ -92,8 +77,46 @@
                 <label>导航目标</label>
                 <strong id="goal-text">--</strong>
               </div>
+              <div class="stat-card">
+                <label>当前速度</label>
+                <strong id="velocity-text">--</strong>
+              </div>
             </div>
-          </div>
+            <p class="hint">
+              导航页只保留地图与导航操作。单指拖动查看地图，使用按钮缩放；只有“选点导航”后轻点地图，再点击“确认导航”才会发送目标。
+            </p>
+          </section>
+
+          <section id="manual-page" class="mode-page">
+            <div class="manual-layout">
+              <div class="camera-card">
+                <div class="camera-title">
+                  <span>前视画面</span>
+                  <span id="camera-status" class="camera-status">等待相机</span>
+                </div>
+                <img id="camera-frame" class="camera-frame" alt="D435 camera stream">
+              </div>
+
+              <div class="manual-control-card">
+                <div class="joystick-card">
+                  <div id="joystick-base" class="joystick-base">
+                    <div id="joystick-knob" class="joystick-knob"></div>
+                  </div>
+                  <p class="hint">按住摇杆拖动控制底盘，松手自动停车。导航模式下不会显示这一页。</p>
+                </div>
+                <div class="stats-grid manual-stats">
+                  <div class="stat-card">
+                    <label>机器人位置</label>
+                    <strong id="manual-pose-text">--</strong>
+                  </div>
+                  <div class="stat-card">
+                    <label>当前速度</label>
+                    <strong id="manual-velocity-text">--</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
         </section>
       </main>
     </div>
