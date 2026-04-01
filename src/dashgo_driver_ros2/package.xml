@@ -23,6 +23,7 @@
   <exec_depend>python3-serial</exec_depend>
   <exec_depend>dashgo_lidar_ros2</exec_depend>
   <exec_depend>dashgo_realsense_ros2</exec_depend>
+  <exec_depend>dashgo_web_control</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

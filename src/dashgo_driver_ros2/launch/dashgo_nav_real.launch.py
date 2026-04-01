@@ -25,6 +25,7 @@ def generate_launch_description():
     start_nav_rviz = LaunchConfiguration("start_nav_rviz")
     start_lidar = LaunchConfiguration("start_lidar")
     start_d435 = LaunchConfiguration("start_d435")
+    start_web_ui = LaunchConfiguration("start_web_ui")
     publish_robot_model = LaunchConfiguration("publish_robot_model")
     driver_port = LaunchConfiguration("driver_port")
     lidar_port = LaunchConfiguration("lidar_port")
@@ -34,6 +35,9 @@ def generate_launch_description():
     laser_z = LaunchConfiguration("laser_z")
     points_frame = LaunchConfiguration("points_frame")
     scan_min_range = LaunchConfiguration("scan_min_range")
+    web_host = LaunchConfiguration("web_host")
+    web_port = LaunchConfiguration("web_port")
+    web_image_topic = LaunchConfiguration("web_image_topic")
 
     return LaunchDescription(
         [
@@ -42,6 +46,7 @@ def generate_launch_description():
             DeclareLaunchArgument("start_nav_rviz", default_value="true"),
             DeclareLaunchArgument("start_lidar", default_value="true"),
             DeclareLaunchArgument("start_d435", default_value="false"),
+            DeclareLaunchArgument("start_web_ui", default_value="true"),
             DeclareLaunchArgument("publish_robot_model", default_value="true"),
             DeclareLaunchArgument("driver_port", default_value="/dev/ttyUSB0"),
             DeclareLaunchArgument(
@@ -58,6 +63,9 @@ def generate_launch_description():
             DeclareLaunchArgument("laser_z", default_value="0.52"),
             DeclareLaunchArgument("points_frame", default_value="base_link"),
             DeclareLaunchArgument("scan_min_range", default_value="0.30"),
+            DeclareLaunchArgument("web_host", default_value="0.0.0.0"),
+            DeclareLaunchArgument("web_port", default_value="8080"),
+            DeclareLaunchArgument("web_image_topic", default_value="/camera/camera/color/image_raw"),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(robot_launch),
                 condition=IfCondition(start_robot),
@@ -174,6 +182,21 @@ def generate_launch_description():
                 condition=IfCondition(start_nav_rviz),
                 output="screen",
                 arguments=["-d", default_nav_rviz],
+            ),
+            Node(
+                package="dashgo_web_control",
+                executable="web_control_node",
+                name="dashgo_web_control",
+                condition=IfCondition(start_web_ui),
+                output="screen",
+                parameters=[
+                    {
+                        "host": web_host,
+                        "port": web_port,
+                        "image_topic": web_image_topic,
+                        "robot_radius": 0.20,
+                    }
+                ],
             ),
         ]
     )
