@@ -28,6 +28,24 @@ def resolve_qr_popup_script():
     return matches[0]
 
 
+def resolve_hotspot_script():
+    matches = glob.glob(
+        os.path.join(
+            get_package_share_directory("dashgo_web_control"),
+            "..",
+            "..",
+            "lib",
+            "python*",
+            "site-packages",
+            "dashgo_web_control",
+            "hotspot_manager.py",
+        )
+    )
+    if not matches:
+        raise FileNotFoundError("Unable to locate hotspot_manager.py")
+    return matches[0]
+
+
 def generate_launch_description():
     driver_share = get_package_share_directory("dashgo_driver_ros2")
     nav_share_dir = get_package_share_directory("nav_slam")
@@ -45,6 +63,7 @@ def generate_launch_description():
     start_lidar = LaunchConfiguration("start_lidar")
     start_d435 = LaunchConfiguration("start_d435")
     start_web_ui = LaunchConfiguration("start_web_ui")
+    start_hotspot = LaunchConfiguration("start_hotspot")
     publish_robot_model = LaunchConfiguration("publish_robot_model")
     driver_port = LaunchConfiguration("driver_port")
     lidar_port = LaunchConfiguration("lidar_port")
@@ -57,6 +76,10 @@ def generate_launch_description():
     web_host = LaunchConfiguration("web_host")
     web_port = LaunchConfiguration("web_port")
     web_image_topic = LaunchConfiguration("web_image_topic")
+    hotspot_connection_name = LaunchConfiguration("hotspot_connection_name")
+    hotspot_ssid = LaunchConfiguration("hotspot_ssid")
+    hotspot_password = LaunchConfiguration("hotspot_password")
+    hotspot_ifname = LaunchConfiguration("hotspot_ifname")
 
     return LaunchDescription(
         [
@@ -66,6 +89,7 @@ def generate_launch_description():
             DeclareLaunchArgument("start_lidar", default_value="true"),
             DeclareLaunchArgument("start_d435", default_value="false"),
             DeclareLaunchArgument("start_web_ui", default_value="true"),
+            DeclareLaunchArgument("start_hotspot", default_value="false"),
             DeclareLaunchArgument("publish_robot_model", default_value="true"),
             DeclareLaunchArgument("driver_port", default_value="/dev/ttyUSB1"),
             DeclareLaunchArgument(
@@ -85,6 +109,10 @@ def generate_launch_description():
             DeclareLaunchArgument("web_host", default_value="0.0.0.0"),
             DeclareLaunchArgument("web_port", default_value="8080"),
             DeclareLaunchArgument("web_image_topic", default_value="/camera/camera/color/image_raw"),
+            DeclareLaunchArgument("hotspot_connection_name", default_value="dashgo-hotspot"),
+            DeclareLaunchArgument("hotspot_ssid", default_value="Dashgo-Robot"),
+            DeclareLaunchArgument("hotspot_password", default_value="dashgo12345"),
+            DeclareLaunchArgument("hotspot_ifname", default_value=""),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(robot_launch),
                 condition=IfCondition(start_robot),
@@ -218,7 +246,28 @@ def generate_launch_description():
                 ],
             ),
             TimerAction(
-                period=1.5,
+                period=0.3,
+                condition=IfCondition(start_hotspot),
+                actions=[
+                    ExecuteProcess(
+                        cmd=[
+                            "python3",
+                            resolve_hotspot_script(),
+                            "--connection-name",
+                            hotspot_connection_name,
+                            "--ssid",
+                            hotspot_ssid,
+                            "--password",
+                            hotspot_password,
+                            "--ifname",
+                            hotspot_ifname,
+                        ],
+                        output="screen",
+                    ),
+                ],
+            ),
+            TimerAction(
+                period=2.3,
                 condition=IfCondition(start_web_ui),
                 actions=[
                     ExecuteProcess(
@@ -229,6 +278,9 @@ def generate_launch_description():
                         additional_env={
                             "DASHGO_WEB_UI_HOST": web_host,
                             "DASHGO_WEB_UI_PORT": web_port,
+                            "DASHGO_HOTSPOT_ENABLED": start_hotspot,
+                            "DASHGO_HOTSPOT_SSID": hotspot_ssid,
+                            "DASHGO_HOTSPOT_PASSWORD": hotspot_password,
                         },
                         output="screen",
                     ),

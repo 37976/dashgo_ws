@@ -96,7 +96,7 @@ export ROS_LOG_DIR=/tmp/roslogs
 cd ~/dashgo_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-ros2 run dashgo_driver_ros2 dashgo_driver_node --ros-args -p port:=/dev/ttyUSB0 -p baud:=115200
+ros2 run dashgo_driver_ros2 dashgo_driver_node --ros-args -p port:=/dev/ttyUSB1 -p baud:=115200
 ```
 
 ### 雷达单独启动
@@ -167,6 +167,28 @@ source install/setup.bash
 ros2 launch dashgo_web_control web_control.launch.py
 ```
 
+### 真机导航，同时开启机器人固定热点
+
+这台机器当前无线网卡是 `wlp13s0`，如需让机器人自己发热点，推荐显式指定：
+
+```bash
+cd ~/dashgo_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+export ROS_LOG_DIR=/tmp/roslogs
+ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py start_hotspot:=true hotspot_ifname:=wlp13s0
+```
+
+如需自定义热点名和密码：
+
+```bash
+ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py \
+  start_hotspot:=true \
+  hotspot_ifname:=wlp13s0 \
+  hotspot_ssid:=Dashgo-Robot \
+  hotspot_password:=dashgo12345
+```
+
 ## 常用检查命令
 
 ```bash
@@ -208,10 +230,40 @@ http://<机器人IP>:8080
 当前网页控制逻辑如下：
 
 - 页面分为“导航页面”和“手动页面”，通过顶部按钮切换
-- 导航页面只保留地图、缩放、选点与确认导航
+- 导航页面保留地图、居中/刷新、选点与确认导航
 - 手动页面只保留相机、摇杆和基础状态
 - 导航不会因为误触立即开始，必须先“选点导航”，再点击“确认导航”
 - 手动模式下才能通过摇杆发送速度指令，导航模式下摇杆会被禁用
+- 地图支持鼠标滚轮缩放、双指缩放，以及拖拽平移
+- 网页地图会叠加显示雷达点
+
+### 二维码弹窗
+
+启动网页控制后，桌面环境下会自动弹出二维码窗口。
+
+- 默认会显示“打开网页”二维码
+- 如果启动时带了 `start_hotspot:=true`，弹窗会显示两个二维码
+- 左侧二维码用于手机连接机器人热点
+- 右侧二维码用于打开控制网页
+
+如果没有图形界面，程序会自动退回到终端打印网页二维码。
+
+### 机器人固定热点说明
+
+当前已经支持由机器人 Ubuntu 22 自己创建固定热点。
+
+- 热点功能默认关闭，避免一启动就切走当前网络
+- 启动参数 `start_hotspot:=true` 后，会先自动打开 Wi-Fi，再拉起热点
+- 默认连接名为 `dashgo-hotspot`
+- 默认热点名为 `Dashgo-Robot`
+- 默认密码为 `dashgo12345`
+- 若你手动关闭过热点，下次重新启动 launch 时会自动重新打开 Wi-Fi 并恢复热点
+
+注意：
+
+- 手机通常需要先扫“连接热点”二维码加入 Wi-Fi，再扫“打开网页”二维码进入控制页
+- 不能稳定地用一个二维码同时完成“自动连 Wi-Fi + 自动打开网页”两件事
+- 热点启动依赖 NetworkManager 的 `nmcli`
 
 如果修改了 `src/dashgo_web_control/web/` 下的前端文件，记得重新编译：
 

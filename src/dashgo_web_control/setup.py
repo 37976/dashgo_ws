@@ -27,6 +27,7 @@ setup(
             "web_control_node = dashgo_web_control.web_control_node:main",
             "show_web_qr = dashgo_web_control.show_web_qr:main",
             "show_web_qr_popup = dashgo_web_control.show_web_qr_popup:main",
+            "dashgo_hotspot = dashgo_web_control.hotspot_manager:main",
         ],
     },
 )

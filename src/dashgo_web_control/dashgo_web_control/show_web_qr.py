@@ -4,7 +4,7 @@ import os
 import re
 import subprocess
 
-from dashgo_web_control._vendor_qrcodegen import QrCode
+from dashgo_web_control.qr_utils import make_qr_matrix
 
 
 def detect_best_host(host):
@@ -59,12 +59,7 @@ def build_web_url(host, port):
 
 
 def make_matrix(url):
-    qr = QrCode.encode_text(url, QrCode.Ecc.MEDIUM)
-    size = qr.get_size()
-    return [
-        [qr.get_module(x, y) for x in range(size)]
-        for y in range(size)
-    ]
+    return make_qr_matrix(url)
 
 
 def render_terminal_qr(matrix):
