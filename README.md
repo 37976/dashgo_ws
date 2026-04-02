@@ -288,4 +288,4 @@ source install/setup.bash
 
 - 雷达在 RViz 中显示时，`LaserScan` 的 QoS 建议设为 `Best Effort`
 - 若 RViz 出现 TF 时间外推，可先将 `Fixed Frame` 设为 `base_footprint` 或 `laser`
-- `dashgo_nav_real.launch.py` 当前默认 `start_d435:=false`、`start_web_ui:=true`
+- `dashgo_nav_real.launch.py` 当前默认 `start_d435:=true`、`start_web_ui:=true`
