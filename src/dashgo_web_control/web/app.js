@@ -48,6 +48,7 @@ const modeDot = document.getElementById("mode-dot");
 const radarDot = document.getElementById("radar-dot");
 const baseDot = document.getElementById("base-dot");
 const cameraDot = document.getElementById("camera-dot");
+const DEFAULT_LOCAL_VIEW_SCALE_FACTOR = 2.4;
 
 let joystickPointerId = null;
 let joystickCenter = null;
@@ -103,7 +104,10 @@ function resizeCanvas() {
   const centerWorld = state.map && state.mapView.initialized
     ? canvasToWorld(canvas.width / 2, canvas.height / 2)
     : null;
-  const size = Math.max(320, Math.floor(canvas.clientWidth));
+  const logicalWidth = canvas.parentElement
+    ? canvas.parentElement.clientWidth
+    : canvas.clientWidth;
+  const size = Math.max(320, Math.floor(logicalWidth));
   canvas.width = size;
   canvas.height = size;
   if (state.map) {
@@ -186,6 +190,16 @@ function canvasToWorld(x, y) {
   return getWorldFromMapPixel(mapPixel.x, mapPixel.y);
 }
 
+function getCanvasEventPoint(event) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = rect.width > 0 ? canvas.width / rect.width : 1;
+  const scaleY = rect.height > 0 ? canvas.height / rect.height : 1;
+  return {
+    x: (event.clientX - rect.left) * scaleX,
+    y: (event.clientY - rect.top) * scaleY,
+  };
+}
+
 function getFitScale() {
   if (!state.map) {
     return 1;
@@ -195,6 +209,14 @@ function getFitScale() {
     (canvas.width - margin * 2) / state.map.width,
     (canvas.height - margin * 2) / state.map.height,
   );
+}
+
+function getDefaultMapScale(centerOnRobot = true) {
+  const fitScale = getFitScale();
+  if (!centerOnRobot) {
+    return fitScale;
+  }
+  return fitScale * DEFAULT_LOCAL_VIEW_SCALE_FACTOR;
 }
 
 function centerMapOn(mapPixelX, mapPixelY) {
@@ -207,9 +229,13 @@ function resetMapView(centerOnRobot = true) {
     return;
   }
   const fitScale = getFitScale();
-  state.mapView.scale = fitScale;
   state.mapView.minScale = fitScale * 0.85;
   state.mapView.maxScale = fitScale * 8.0;
+  state.mapView.scale = clamp(
+    getDefaultMapScale(centerOnRobot),
+    state.mapView.minScale,
+    state.mapView.maxScale,
+  );
   state.mapView.initialized = true;
 
   const robot = centerOnRobot ? state.status?.odom : null;
@@ -690,9 +716,7 @@ canvas.addEventListener("wheel", (event) => {
     return;
   }
   event.preventDefault();
-  const rect = canvas.getBoundingClientRect();
-  const x = event.clientX - rect.left;
-  const y = event.clientY - rect.top;
+  const { x, y } = getCanvasEventPoint(event);
   const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
   zoomAtCanvasPoint(x, y, factor);
 }, { passive: false });
@@ -701,11 +725,11 @@ canvas.addEventListener("pointerdown", (event) => {
   if (!state.map) {
     return;
   }
-  const rect = canvas.getBoundingClientRect();
+  const { x, y } = getCanvasEventPoint(event);
   mapGesture = {
     pointerId: event.pointerId,
-    startX: event.clientX - rect.left,
-    startY: event.clientY - rect.top,
+    startX: x,
+    startY: y,
     startOffsetX: state.mapView.offsetX,
     startOffsetY: state.mapView.offsetY,
     moved: false,
@@ -717,9 +741,7 @@ canvas.addEventListener("pointermove", (event) => {
   if (!mapGesture || event.pointerId !== mapGesture.pointerId) {
     return;
   }
-  const rect = canvas.getBoundingClientRect();
-  const x = event.clientX - rect.left;
-  const y = event.clientY - rect.top;
+  const { x, y } = getCanvasEventPoint(event);
   const dx = x - mapGesture.startX;
   const dy = y - mapGesture.startY;
 
@@ -739,9 +761,7 @@ function finishMapGesture(event) {
     return;
   }
 
-  const rect = canvas.getBoundingClientRect();
-  const x = event.clientX - rect.left;
-  const y = event.clientY - rect.top;
+  const { x, y } = getCanvasEventPoint(event);
   const wasTap = !mapGesture.moved;
 
   if (wasTap && state.goalPickArmed) {
@@ -866,7 +886,7 @@ function refreshCameraFrame() {
     cameraStatus.textContent = "等待相机";
     return;
   }
-  cameraFrame.src = `/api/camera/frame.bmp?ts=${Date.now()}`;
+  cameraFrame.src = `/api/camera/frame.png?ts=${Date.now()}`;
 }
 
 function startCameraLoop() {

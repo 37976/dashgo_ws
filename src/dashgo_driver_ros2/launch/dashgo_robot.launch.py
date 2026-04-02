@@ -78,7 +78,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "driver_port",
-                default_value="/dev/ttyUSB0",
+                default_value="/dev/ttyUSB1",
                 description="Serial port for the Dashgo base controller.",
             ),
             DeclareLaunchArgument(

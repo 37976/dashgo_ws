@@ -4,8 +4,10 @@ import json
 import math
 import mimetypes
 import os
+import struct
 import threading
 import time
+import zlib
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
@@ -45,7 +47,7 @@ class WebControlNode(Node):
         self.declare_parameter("cmd_vel_timeout", 0.6)
         self.declare_parameter("map_publish_hz", 1.0)
         self.declare_parameter("camera_publish_hz", 2.0)
-        self.declare_parameter("camera_max_width", 320)
+        self.declare_parameter("camera_max_width", 240)
         self.declare_parameter("robot_radius", 0.20)
         self.declare_parameter("odom_online_timeout", 1.5)
         self.declare_parameter("scan_online_timeout", 1.5)
@@ -181,7 +183,7 @@ class WebControlNode(Node):
             return
 
         try:
-            frame_bytes, width, height = self.convert_image_to_bmp(msg)
+            frame_bytes, width, height = self.convert_image_to_png(msg)
         except ValueError as exc:
             self.get_logger().debug(f"Skip image frame: {exc}")
             return
@@ -328,7 +330,7 @@ class WebControlNode(Node):
         with self.state_lock:
             return self.camera_frame
 
-    def convert_image_to_bmp(self, msg):
+    def convert_image_to_png(self, msg):
         if msg.encoding not in ("rgb8", "bgr8", "rgba8", "bgra8", "mono8"):
             raise ValueError(f"Unsupported encoding: {msg.encoding}")
 
@@ -385,43 +387,35 @@ class WebControlNode(Node):
                 out_rgb[dst_index + 1] = g
                 out_rgb[dst_index + 2] = b
 
-        return self.rgb_to_bmp_bytes(out_rgb, out_width, out_height), out_width, out_height
+        return self.rgb_to_png_bytes(out_rgb, out_width, out_height), out_width, out_height
 
-    def rgb_to_bmp_bytes(self, rgb_bytes, width, height):
+    def png_chunk(self, chunk_type, data):
+        crc = zlib.crc32(chunk_type)
+        crc = zlib.crc32(data, crc) & 0xFFFFFFFF
+        return (
+            struct.pack(">I", len(data)) +
+            chunk_type +
+            data +
+            struct.pack(">I", crc)
+        )
+
+    def rgb_to_png_bytes(self, rgb_bytes, width, height):
+        raw = bytearray()
         row_stride = width * 3
-        padded_stride = (row_stride + 3) & ~3
-        pixel_array_size = padded_stride * height
-        file_size = 54 + pixel_array_size
-
-        header = bytearray()
-        header.extend(b"BM")
-        header.extend(file_size.to_bytes(4, "little"))
-        header.extend((0).to_bytes(4, "little"))
-        header.extend((54).to_bytes(4, "little"))
-        header.extend((40).to_bytes(4, "little"))
-        header.extend(width.to_bytes(4, "little", signed=True))
-        header.extend(height.to_bytes(4, "little", signed=True))
-        header.extend((1).to_bytes(2, "little"))
-        header.extend((24).to_bytes(2, "little"))
-        header.extend((0).to_bytes(4, "little"))
-        header.extend(pixel_array_size.to_bytes(4, "little"))
-        header.extend((2835).to_bytes(4, "little"))
-        header.extend((2835).to_bytes(4, "little"))
-        header.extend((0).to_bytes(4, "little"))
-        header.extend((0).to_bytes(4, "little"))
-
-        pixel_data = bytearray(pixel_array_size)
         for row in range(height):
-            src_row = row * row_stride
-            dst_row = (height - 1 - row) * padded_stride
-            for col in range(width):
-                src = src_row + col * 3
-                dst = dst_row + col * 3
-                pixel_data[dst] = rgb_bytes[src + 2]
-                pixel_data[dst + 1] = rgb_bytes[src + 1]
-                pixel_data[dst + 2] = rgb_bytes[src]
+            raw.append(0)
+            row_start = row * row_stride
+            raw.extend(rgb_bytes[row_start:row_start + row_stride])
 
-        return bytes(header + pixel_data)
+        compressed = zlib.compress(bytes(raw), level=6)
+        header = b"\x89PNG\r\n\x1a\n"
+        ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+        return b"".join([
+            header,
+            self.png_chunk(b"IHDR", ihdr),
+            self.png_chunk(b"IDAT", compressed),
+            self.png_chunk(b"IEND", b""),
+        ])
 
     def read_static_file(self, rel_path):
         requested = rel_path.lstrip("/") or "index.html"
@@ -480,7 +474,7 @@ class WebControlNode(Node):
                 if parsed.path == "/api/camera/meta":
                     self.send_json(node.build_camera_meta_payload())
                     return
-                if parsed.path == "/api/camera/frame.bmp":
+                if parsed.path in ("/api/camera/frame.bmp", "/api/camera/frame.png"):
                     frame = node.build_camera_frame_payload()
                     if frame is None:
                         self.send_json(
@@ -489,7 +483,7 @@ class WebControlNode(Node):
                         )
                         return
                     self.send_response(HTTPStatus.OK)
-                    self.send_header("Content-Type", "image/bmp")
+                    self.send_header("Content-Type", "image/png")
                     self.send_header("Cache-Control", "no-store")
                     self.send_header("Content-Length", str(len(frame)))
                     self.end_headers()

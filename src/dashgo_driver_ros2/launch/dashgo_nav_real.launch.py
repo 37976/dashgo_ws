@@ -48,7 +48,7 @@ def generate_launch_description():
             DeclareLaunchArgument("start_d435", default_value="false"),
             DeclareLaunchArgument("start_web_ui", default_value="true"),
             DeclareLaunchArgument("publish_robot_model", default_value="true"),
-            DeclareLaunchArgument("driver_port", default_value="/dev/ttyUSB0"),
+            DeclareLaunchArgument("driver_port", default_value="/dev/ttyUSB1"),
             DeclareLaunchArgument(
                 "lidar_port",
                 default_value=(

@@ -494,7 +494,7 @@ class DashgoDriverNode(Node):
             description="Dashgo base driver runtime parameter."
         )
         defaults = [
-            ("port", "/dev/ttyACM0"),
+            ("port", "/dev/ttyUSB1"),
             ("baud", 57600),
             ("timeout", 0.5),
             ("rate", 50),

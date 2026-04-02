@@ -69,28 +69,31 @@ body {
 }
 
 .status-strip {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
+  width: min(100%, 320px);
 }
 
 .status-chip {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  padding: 6px 10px;
+  min-width: 0;
+  padding: 5px 8px;
   border-radius: 999px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.92);
   color: var(--dark);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .status-dot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: #c9d4e0;
   box-shadow: 0 0 0 2px rgba(201, 212, 224, 0.28);
@@ -161,15 +164,22 @@ body {
 }
 
 .map-header-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.map-header-actions .ghost-button {
+  padding: 9px 8px;
+  font-size: 13px;
+  border-radius: 12px;
+  white-space: nowrap;
 }
 
 #map-canvas {
-  width: 100%;
-  min-height: 56vh;
+  width: min(100%, 78vh);
+  max-width: 760px;
+  min-height: 48vh;
   aspect-ratio: 1 / 1;
   border-radius: 18px;
   border: 1px solid var(--line);
@@ -177,11 +187,19 @@ body {
   touch-action: none;
 }
 
-.map-goal-bar {
-  display: flex;
-  flex-wrap: wrap;
+.map-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 128px;
   gap: 10px;
-  margin: 12px 0 10px;
+  align-items: stretch;
+}
+
+.map-goal-bar {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin: 0;
+  align-content: start;
 }
 
 .mode-switch {
@@ -211,17 +229,6 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
-}
-
-.orientation-note {
-  display: none;
-  border-radius: 14px;
-  border: 1px solid rgba(240, 173, 44, 0.28);
-  background: linear-gradient(180deg, rgba(255, 243, 214, 0.92), rgba(255, 249, 236, 0.96));
-  color: #7a540a;
-  padding: 10px 12px;
-  font-size: 13px;
-  line-height: 1.5;
 }
 
 .camera-title {
@@ -325,6 +332,13 @@ body {
   padding: 10px 11px;
 }
 
+.stat-card-inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .stat-card label {
   display: block;
   color: var(--muted);
@@ -335,6 +349,19 @@ body {
 .stat-card strong {
   font-size: 13px;
   line-height: 1.45;
+}
+
+.stat-card-inline label {
+  margin-bottom: 0;
+  flex: 0 0 auto;
+}
+
+.stat-card-inline strong {
+  min-width: 0;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .hint {
@@ -402,7 +429,7 @@ body {
   }
 
   .status-strip {
-    justify-content: flex-start;
+    width: 100%;
   }
 
   .brand-block {
@@ -418,11 +445,7 @@ body {
   }
 
   .map-header-actions {
-    justify-content: flex-start;
-  }
-
-  .orientation-note {
-    display: block;
+    justify-content: stretch;
   }
 
   .stop-button {
@@ -442,8 +465,12 @@ body {
     grid-template-columns: 1fr 1fr;
   }
 
+  .map-workspace {
+    grid-template-columns: minmax(0, 1fr) 118px;
+  }
+
   #map-canvas {
-    min-height: 44vh;
+    min-height: 40vh;
   }
 
   .camera-frame {
@@ -464,30 +491,44 @@ body {
   }
 
   .status-strip {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
     width: 100%;
   }
 
   .status-chip {
-    justify-content: center;
-    padding: 6px 8px;
-    font-size: 11px;
+    padding: 4px 6px;
+    font-size: 10px;
+    gap: 4px;
+  }
+
+  .status-dot {
+    width: 6px;
+    height: 6px;
   }
 
   .mode-switch {
     grid-template-columns: 1fr 1fr;
   }
 
+  .map-workspace {
+    grid-template-columns: 1fr;
+  }
+
   .map-goal-bar {
-    display: grid;
     grid-template-columns: 1fr;
   }
 
   .map-header-actions {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
     width: 100%;
+  }
+
+  .map-header-actions .ghost-button {
+    padding: 8px 4px;
+    font-size: 12px;
+  }
+
+  #map-canvas {
+    width: min(100%, 72vh);
+    min-height: 36vh;
   }
 
   .stats-grid {

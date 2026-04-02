@@ -47,10 +47,6 @@
             </div>
           </div>
 
-          <div class="orientation-note">
-            建议手机横屏使用，这样当前模式页里的核心功能基本都能放进同一屏。
-          </div>
-
           <section id="nav-page" class="mode-page active">
             <div class="map-header-actions">
               <button id="zoom-out-button" class="ghost-button">缩小</button>
@@ -58,26 +54,28 @@
               <button id="fit-map-button" class="ghost-button">居中</button>
               <button id="refresh-map-button" class="ghost-button">刷新地图</button>
             </div>
-            <canvas id="map-canvas" width="900" height="900"></canvas>
-            <div class="map-goal-bar">
-              <button id="pick-goal-button" class="secondary-button">选点导航</button>
-              <button id="clear-goal-button" class="ghost-button">清除候选</button>
-              <button id="confirm-goal-button" class="primary-button" disabled>确认导航</button>
+            <div class="map-workspace">
+              <canvas id="map-canvas" width="900" height="900"></canvas>
+              <div class="map-goal-bar">
+                <button id="pick-goal-button" class="secondary-button">选点导航</button>
+                <button id="clear-goal-button" class="ghost-button">清除候选</button>
+                <button id="confirm-goal-button" class="primary-button" disabled>确认导航</button>
+              </div>
             </div>
             <div class="stats-grid nav-stats">
-              <div class="stat-card">
+              <div class="stat-card stat-card-inline">
                 <label>机器人位置</label>
                 <strong id="pose-text">--</strong>
               </div>
-              <div class="stat-card">
+              <div class="stat-card stat-card-inline">
                 <label>地图状态</label>
                 <strong id="map-text">--</strong>
               </div>
-              <div class="stat-card">
+              <div class="stat-card stat-card-inline">
                 <label>导航目标</label>
                 <strong id="goal-text">--</strong>
               </div>
-              <div class="stat-card">
+              <div class="stat-card stat-card-inline">
                 <label>当前速度</label>
                 <strong id="velocity-text">--</strong>
               </div>
@@ -102,14 +100,14 @@
                   <div id="joystick-base" class="joystick-base">
                     <div id="joystick-knob" class="joystick-knob"></div>
                   </div>
-                  <p class="hint">按住摇杆拖动控制底盘，松手自动停车。导航模式下不会显示这一页。</p>
+                  <p class="hint">按住摇杆拖动控制底盘，松手自动停车。</p>
                 </div>
                 <div class="stats-grid manual-stats">
-                  <div class="stat-card">
+                  <div class="stat-card stat-card-inline">
                     <label>机器人位置</label>
                     <strong id="manual-pose-text">--</strong>
                   </div>
-                  <div class="stat-card">
+                  <div class="stat-card stat-card-inline">
                     <label>当前速度</label>
                     <strong id="manual-velocity-text">--</strong>
                   </div>
