@@ -4,6 +4,7 @@ const state = {
   status: null,
   map: null,
   path: [],
+  scan: [],
   pendingGoal: null,
   goalPickArmed: false,
   mapView: {
@@ -12,6 +13,7 @@ const state = {
     maxScale: 1,
     offsetX: 0,
     offsetY: 0,
+    headingReferenceYaw: null,
     initialized: false,
   },
 };
@@ -56,6 +58,7 @@ let joystickRadius = 0;
 let cmdVelTimer = null;
 let lastCmd = { linear: 0, angular: 0 };
 let mapGesture = null;
+let mapPointers = new Map();
 let mapImage = null;
 let cameraTimer = null;
 let statusOverrideUntil = 0;
@@ -160,17 +163,110 @@ function getWorldFromMapPixel(x, y) {
   };
 }
 
-function mapPixelToCanvas(x, y) {
+function rotateVector(x, y, angle) {
+  const cosAngle = Math.cos(angle);
+  const sinAngle = Math.sin(angle);
   return {
-    x: state.mapView.offsetX + x * state.mapView.scale,
-    y: state.mapView.offsetY + y * state.mapView.scale,
+    x: x * cosAngle - y * sinAngle,
+    y: x * sinAngle + y * cosAngle,
   };
 }
 
-function canvasToMapPixel(x, y) {
+function getRobotMapPixel() {
+  if (!state.map || !state.status?.odom) {
+    return null;
+  }
+  return getMapPixelFromWorld(state.status.odom.x, state.status.odom.y);
+}
+
+function getMapRotation() {
+  const yaw = state.mapView.headingReferenceYaw;
+  return Number.isFinite(yaw) ? yaw - Math.PI / 2 : 0;
+}
+
+function getScreenRobotYaw() {
+  const yaw = state.status?.odom?.yaw;
+  if (!Number.isFinite(yaw)) {
+    return 0;
+  }
+  return -yaw + getMapRotation();
+}
+
+function getOffsetForMapPixelAtCanvasPoint(mapPixelX, mapPixelY, canvasX, canvasY, scale = state.mapView.scale) {
+  const robotPixel = getRobotMapPixel();
+  if (!robotPixel) {
+    return {
+      offsetX: canvasX - mapPixelX * scale,
+      offsetY: canvasY - mapPixelY * scale,
+    };
+  }
+
+  const rotation = getMapRotation();
+  const relative = rotateVector(
+    (mapPixelX - robotPixel.x) * scale,
+    (mapPixelY - robotPixel.y) * scale,
+    rotation,
+  );
+
   return {
-    x: (x - state.mapView.offsetX) / state.mapView.scale,
-    y: (y - state.mapView.offsetY) / state.mapView.scale,
+    offsetX: canvasX - robotPixel.x * scale - relative.x,
+    offsetY: canvasY - robotPixel.y * scale - relative.y,
+  };
+}
+
+function mapPixelToCanvas(
+  x,
+  y,
+  scale = state.mapView.scale,
+  offsetX = state.mapView.offsetX,
+  offsetY = state.mapView.offsetY,
+) {
+  const robotPixel = getRobotMapPixel();
+  if (!robotPixel) {
+    return {
+      x: offsetX + x * scale,
+      y: offsetY + y * scale,
+    };
+  }
+
+  const rotation = getMapRotation();
+  const baseX = offsetX + robotPixel.x * scale;
+  const baseY = offsetY + robotPixel.y * scale;
+  const relative = rotateVector(
+    (x - robotPixel.x) * scale,
+    (y - robotPixel.y) * scale,
+    rotation,
+  );
+
+  return {
+    x: baseX + relative.x,
+    y: baseY + relative.y,
+  };
+}
+
+function canvasToMapPixel(
+  x,
+  y,
+  scale = state.mapView.scale,
+  offsetX = state.mapView.offsetX,
+  offsetY = state.mapView.offsetY,
+) {
+  const robotPixel = getRobotMapPixel();
+  if (!robotPixel) {
+    return {
+      x: (x - offsetX) / scale,
+      y: (y - offsetY) / scale,
+    };
+  }
+
+  const rotation = getMapRotation();
+  const baseX = offsetX + robotPixel.x * scale;
+  const baseY = offsetY + robotPixel.y * scale;
+  const relative = rotateVector(x - baseX, y - baseY, -rotation);
+
+  return {
+    x: robotPixel.x + relative.x / scale,
+    y: robotPixel.y + relative.y / scale,
   };
 }
 
@@ -200,6 +296,80 @@ function getCanvasEventPoint(event) {
   };
 }
 
+function getMapPointerEntries() {
+  return Array.from(mapPointers.entries()).slice(0, 2);
+}
+
+function beginMapPanGesture(pointerId, point, moved = false) {
+  mapGesture = {
+    mode: "pan",
+    pointerId,
+    startX: point.x,
+    startY: point.y,
+    startOffsetX: state.mapView.offsetX,
+    startOffsetY: state.mapView.offsetY,
+    moved,
+  };
+}
+
+function beginMapPinchGesture() {
+  const pointerEntries = getMapPointerEntries();
+  if (pointerEntries.length < 2) {
+    return;
+  }
+
+  const first = pointerEntries[0][1];
+  const second = pointerEntries[1][1];
+  const centerX = (first.x + second.x) / 2;
+  const centerY = (first.y + second.y) / 2;
+  const focus = canvasToMapPixel(centerX, centerY);
+
+  mapGesture = {
+    mode: "pinch",
+    startDistance: Math.max(Math.hypot(second.x - first.x, second.y - first.y), 1),
+    startScale: state.mapView.scale,
+    focusMapX: focus.x,
+    focusMapY: focus.y,
+  };
+}
+
+function updateMapPinchGesture() {
+  const pointerEntries = getMapPointerEntries();
+  if (pointerEntries.length < 2) {
+    return;
+  }
+
+  if (!mapGesture || mapGesture.mode !== "pinch") {
+    beginMapPinchGesture();
+  }
+  if (!mapGesture || mapGesture.mode !== "pinch") {
+    return;
+  }
+
+  const first = pointerEntries[0][1];
+  const second = pointerEntries[1][1];
+  const centerX = (first.x + second.x) / 2;
+  const centerY = (first.y + second.y) / 2;
+  const distance = Math.max(Math.hypot(second.x - first.x, second.y - first.y), 1);
+  const nextScale = clamp(
+    mapGesture.startScale * (distance / mapGesture.startDistance),
+    state.mapView.minScale,
+    state.mapView.maxScale,
+  );
+  const offset = getOffsetForMapPixelAtCanvasPoint(
+    mapGesture.focusMapX,
+    mapGesture.focusMapY,
+    centerX,
+    centerY,
+    nextScale,
+  );
+
+  state.mapView.scale = nextScale;
+  state.mapView.offsetX = offset.offsetX;
+  state.mapView.offsetY = offset.offsetY;
+  renderScene();
+}
+
 function getFitScale() {
   if (!state.map) {
     return 1;
@@ -220,8 +390,14 @@ function getDefaultMapScale(centerOnRobot = true) {
 }
 
 function centerMapOn(mapPixelX, mapPixelY) {
-  state.mapView.offsetX = canvas.width / 2 - mapPixelX * state.mapView.scale;
-  state.mapView.offsetY = canvas.height / 2 - mapPixelY * state.mapView.scale;
+  const offset = getOffsetForMapPixelAtCanvasPoint(
+    mapPixelX,
+    mapPixelY,
+    canvas.width / 2,
+    canvas.height / 2,
+  );
+  state.mapView.offsetX = offset.offsetX;
+  state.mapView.offsetY = offset.offsetY;
 }
 
 function resetMapView(centerOnRobot = true) {
@@ -288,8 +464,15 @@ function zoomAtCanvasPoint(canvasX, canvasY, factor) {
     state.mapView.maxScale,
   );
   state.mapView.scale = nextScale;
-  state.mapView.offsetX = canvasX - focus.x * nextScale;
-  state.mapView.offsetY = canvasY - focus.y * nextScale;
+  const offset = getOffsetForMapPixelAtCanvasPoint(
+    focus.x,
+    focus.y,
+    canvasX,
+    canvasY,
+    nextScale,
+  );
+  state.mapView.offsetX = offset.offsetX;
+  state.mapView.offsetY = offset.offsetY;
   renderScene();
 }
 
@@ -387,30 +570,40 @@ function drawMapGrid() {
     return;
   }
 
-  const startMap = canvasToMapPixel(0, 0);
-  const endMap = canvasToMapPixel(canvas.width, canvas.height);
-  const xStart = Math.floor(Math.min(startMap.x, endMap.x) / meterStepInPixels) * meterStepInPixels;
-  const xEnd = Math.ceil(Math.max(startMap.x, endMap.x) / meterStepInPixels) * meterStepInPixels;
-  const yStart = Math.floor(Math.min(startMap.y, endMap.y) / meterStepInPixels) * meterStepInPixels;
-  const yEnd = Math.ceil(Math.max(startMap.y, endMap.y) / meterStepInPixels) * meterStepInPixels;
+  const corners = [
+    canvasToMapPixel(0, 0),
+    canvasToMapPixel(canvas.width, 0),
+    canvasToMapPixel(0, canvas.height),
+    canvasToMapPixel(canvas.width, canvas.height),
+  ];
+  const minX = Math.min(...corners.map((point) => point.x));
+  const maxX = Math.max(...corners.map((point) => point.x));
+  const minY = Math.min(...corners.map((point) => point.y));
+  const maxY = Math.max(...corners.map((point) => point.y));
+  const xStart = Math.floor(minX / meterStepInPixels) * meterStepInPixels;
+  const xEnd = Math.ceil(maxX / meterStepInPixels) * meterStepInPixels;
+  const yStart = Math.floor(minY / meterStepInPixels) * meterStepInPixels;
+  const yEnd = Math.ceil(maxY / meterStepInPixels) * meterStepInPixels;
 
   ctx.save();
   ctx.strokeStyle = "rgba(15, 118, 214, 0.12)";
   ctx.lineWidth = 1;
 
   for (let x = xStart; x <= xEnd; x += meterStepInPixels) {
-    const sx = state.mapView.offsetX + x * state.mapView.scale;
+    const start = mapPixelToCanvas(x, yStart);
+    const end = mapPixelToCanvas(x, yEnd);
     ctx.beginPath();
-    ctx.moveTo(sx, 0);
-    ctx.lineTo(sx, canvas.height);
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(end.x, end.y);
     ctx.stroke();
   }
 
   for (let y = yStart; y <= yEnd; y += meterStepInPixels) {
-    const sy = state.mapView.offsetY + y * state.mapView.scale;
+    const start = mapPixelToCanvas(xStart, y);
+    const end = mapPixelToCanvas(xEnd, y);
     ctx.beginPath();
-    ctx.moveTo(0, sy);
-    ctx.lineTo(canvas.width, sy);
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(end.x, end.y);
     ctx.stroke();
   }
   ctx.restore();
@@ -430,7 +623,7 @@ function drawRobot() {
 
   ctx.save();
   ctx.translate(p.x, p.y);
-  ctx.rotate(-pose.yaw);
+  ctx.rotate(getScreenRobotYaw());
   ctx.fillStyle = "#0f76d6";
   ctx.beginPath();
   ctx.arc(0, 0, radiusPx, 0, Math.PI * 2);
@@ -467,6 +660,28 @@ function drawPath() {
   ctx.restore();
 }
 
+function drawScan() {
+  const odom = state.status?.odom;
+  if (!odom || !state.scan || state.scan.length === 0) {
+    return;
+  }
+
+  const cosYaw = Math.cos(odom.yaw);
+  const sinYaw = Math.sin(odom.yaw);
+
+  ctx.save();
+  ctx.fillStyle = "rgba(255, 138, 0, 0.78)";
+  state.scan.forEach((point) => {
+    const worldX = odom.x + point.x * cosYaw - point.y * sinYaw;
+    const worldY = odom.y + point.x * sinYaw + point.y * cosYaw;
+    const canvasPoint = worldToCanvas(worldX, worldY);
+    ctx.beginPath();
+    ctx.arc(canvasPoint.x, canvasPoint.y, 1.4, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.restore();
+}
+
 function drawGoal() {
   const goal = state.pendingGoal || state.status?.goal;
   if (!goal) {
@@ -491,7 +706,7 @@ function drawGoal() {
 
   if (Number.isFinite(goal.yaw)) {
     ctx.translate(p.x, p.y);
-    ctx.rotate(-goal.yaw);
+    ctx.rotate(-goal.yaw + getMapRotation());
     ctx.fillStyle = accent;
     ctx.beginPath();
     ctx.moveTo(20, 0);
@@ -515,6 +730,16 @@ function renderScene() {
   if (mapImage && state.map) {
     ctx.save();
     ctx.imageSmoothingEnabled = false;
+    const robotPixel = getRobotMapPixel();
+    if (robotPixel) {
+      const robotBase = {
+        x: state.mapView.offsetX + robotPixel.x * state.mapView.scale,
+        y: state.mapView.offsetY + robotPixel.y * state.mapView.scale,
+      };
+      ctx.translate(robotBase.x, robotBase.y);
+      ctx.rotate(getMapRotation());
+      ctx.translate(-robotBase.x, -robotBase.y);
+    }
     ctx.drawImage(
       mapImage,
       state.mapView.offsetX,
@@ -526,6 +751,7 @@ function renderScene() {
     drawMapGrid();
   }
 
+  drawScan();
   drawPath();
   drawGoal();
   drawRobot();
@@ -534,7 +760,19 @@ function renderScene() {
 async function fetchStatus() {
   try {
     const payload = await apiGet("/api/status");
+    const shouldLockHeading = (
+      state.mapView.headingReferenceYaw === null &&
+      Number.isFinite(payload?.odom?.yaw)
+    );
     state.status = payload;
+    state.scan = Array.isArray(payload.scan) ? payload.scan : [];
+    if (shouldLockHeading) {
+      state.mapView.headingReferenceYaw = payload.odom.yaw;
+      if (state.map && state.mapView.initialized) {
+        resetMapView();
+        return;
+      }
+    }
     setDefaultStatus(
       payload.has_odom
         ? "已连接机器人，可缩放查看地图；点“选点导航”后再确认发起导航。"
@@ -725,23 +963,33 @@ canvas.addEventListener("pointerdown", (event) => {
   if (!state.map) {
     return;
   }
-  const { x, y } = getCanvasEventPoint(event);
-  mapGesture = {
-    pointerId: event.pointerId,
-    startX: x,
-    startY: y,
-    startOffsetX: state.mapView.offsetX,
-    startOffsetY: state.mapView.offsetY,
-    moved: false,
-  };
+  const point = getCanvasEventPoint(event);
+  mapPointers.set(event.pointerId, point);
+  if (mapPointers.size >= 2) {
+    beginMapPinchGesture();
+  } else {
+    beginMapPanGesture(event.pointerId, point);
+  }
   canvas.setPointerCapture(event.pointerId);
 });
 
 canvas.addEventListener("pointermove", (event) => {
-  if (!mapGesture || event.pointerId !== mapGesture.pointerId) {
+  if (!state.map || !mapPointers.has(event.pointerId)) {
     return;
   }
-  const { x, y } = getCanvasEventPoint(event);
+  const point = getCanvasEventPoint(event);
+  mapPointers.set(event.pointerId, point);
+
+  if (mapPointers.size >= 2) {
+    updateMapPinchGesture();
+    return;
+  }
+
+  if (!mapGesture || mapGesture.mode !== "pan" || event.pointerId !== mapGesture.pointerId) {
+    return;
+  }
+
+  const { x, y } = point;
   const dx = x - mapGesture.startX;
   const dy = y - mapGesture.startY;
 
@@ -757,18 +1005,26 @@ canvas.addEventListener("pointermove", (event) => {
 });
 
 function finishMapGesture(event) {
-  if (!mapGesture || event.pointerId !== mapGesture.pointerId) {
+  if (!state.map || !mapPointers.has(event.pointerId)) {
     return;
   }
 
-  const { x, y } = getCanvasEventPoint(event);
-  const wasTap = !mapGesture.moved;
+  const point = getCanvasEventPoint(event);
+  mapPointers.set(event.pointerId, point);
+
+  const wasTap = (
+    mapGesture &&
+    mapGesture.mode === "pan" &&
+    event.pointerId === mapGesture.pointerId &&
+    !mapGesture.moved &&
+    mapPointers.size === 1
+  );
 
   if (wasTap && state.goalPickArmed) {
     if (state.status?.control_mode === "manual") {
       setStatusMessage("当前是手动模式，先切到导航模式再选目标。", 2500);
     } else {
-      const goal = canvasToWorld(x, y);
+      const goal = canvasToWorld(point.x, point.y);
       state.pendingGoal = {
         x: goal.x,
         y: goal.y,
@@ -781,7 +1037,16 @@ function finishMapGesture(event) {
     }
   }
 
-  mapGesture = null;
+  mapPointers.delete(event.pointerId);
+
+  if (mapPointers.size >= 2) {
+    beginMapPinchGesture();
+  } else if (mapPointers.size === 1) {
+    const [pointerId, remainingPoint] = Array.from(mapPointers.entries())[0];
+    beginMapPanGesture(pointerId, remainingPoint, true);
+  } else {
+    mapGesture = null;
+  }
 }
 
 canvas.addEventListener("pointerup", finishMapGesture);
@@ -821,13 +1086,17 @@ navModeButton.addEventListener("click", async () => {
   }
 });
 
-zoomInButton.addEventListener("click", () => {
-  zoomMap(1.2);
-});
+if (zoomInButton) {
+  zoomInButton.addEventListener("click", () => {
+    zoomMap(1.2);
+  });
+}
 
-zoomOutButton.addEventListener("click", () => {
-  zoomMap(1 / 1.2);
-});
+if (zoomOutButton) {
+  zoomOutButton.addEventListener("click", () => {
+    zoomMap(1 / 1.2);
+  });
+}
 
 fitMapButton.addEventListener("click", () => {
   resetMapView();
