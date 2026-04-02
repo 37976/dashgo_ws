@@ -9,7 +9,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from dashgo_web_control.qr_utils import build_wifi_qr_text, make_qr_matrix
-from dashgo_web_control.show_web_qr import build_web_url, make_matrix, print_web_qr
+from dashgo_web_control.show_web_qr import build_web_url, make_matrix, print_web_qr, wait_for_web_url
 
 
 def draw_qr(canvas, matrix, scale=7, quiet_zone=4):
@@ -68,7 +68,11 @@ def make_qr_block(parent, title, subtitle, matrix):
 
 
 def show_popup(host, port, hotspot_enabled=False, hotspot_ssid="", hotspot_password=""):
-    url = build_web_url(host, port)
+    try:
+        url = wait_for_web_url(host, port, hotspot_enabled=hotspot_enabled)
+    except RuntimeError as exc:
+        print(f"Web UI readiness check timed out, falling back to current address guess: {exc}")
+        url = build_web_url(host, port)
     web_matrix = make_matrix(url)
 
     root = tk.Tk()
@@ -141,14 +145,14 @@ def main():
     hotspot_password = os.environ.get("DASHGO_HOTSPOT_PASSWORD", "")
 
     if not os.environ.get("DISPLAY"):
-        print_web_qr(host, port)
+        print_web_qr(host, port, hotspot_enabled=hotspot_enabled)
         return
 
     try:
         show_popup(host, port, hotspot_enabled, hotspot_ssid, hotspot_password)
     except tk.TclError as exc:
         print(f"QR popup failed, falling back to terminal output: {exc}")
-        print_web_qr(host, port)
+        print_web_qr(host, port, hotspot_enabled=hotspot_enabled)
 
 
 if __name__ == "__main__":

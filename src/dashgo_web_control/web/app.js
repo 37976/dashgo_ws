@@ -4,15 +4,14 @@ const state = {
   status: null,
   map: null,
   path: [],
-  scan: [],
   pendingGoal: null,
   goalPickArmed: false,
   mapView: {
     scale: 1,
     minScale: 1,
     maxScale: 1,
-    offsetX: 0,
-    offsetY: 0,
+    centerX: 0,
+    centerY: 0,
     headingReferenceYaw: null,
     initialized: false,
   },
@@ -51,7 +50,6 @@ const radarDot = document.getElementById("radar-dot");
 const baseDot = document.getElementById("base-dot");
 const cameraDot = document.getElementById("camera-dot");
 const DEFAULT_LOCAL_VIEW_SCALE_FACTOR = 2.4;
-
 let joystickPointerId = null;
 let joystickCenter = null;
 let joystickRadius = 0;
@@ -62,6 +60,7 @@ let mapPointers = new Map();
 let mapImage = null;
 let cameraTimer = null;
 let statusOverrideUntil = 0;
+let renderQueued = false;
 
 function clamp(value, low, high) {
   return Math.max(low, Math.min(high, value));
@@ -81,6 +80,17 @@ function setDefaultStatus(message) {
     return;
   }
   statusLine.textContent = message;
+}
+
+function requestRender() {
+  if (renderQueued) {
+    return;
+  }
+  renderQueued = true;
+  window.requestAnimationFrame(() => {
+    renderQueued = false;
+    renderScene();
+  });
 }
 
 async function apiGet(url) {
@@ -116,18 +126,23 @@ function resizeCanvas() {
   if (state.map) {
     syncMapView(centerWorld);
   } else {
-    renderScene();
+    requestRender();
   }
 }
 
 function setModeButtons(mode) {
+  const wasManualActive = manualPage.classList.contains("active");
+  const wasNavActive = navPage.classList.contains("active");
   manualModeButton.classList.toggle("active", mode === "manual");
   navModeButton.classList.toggle("active", mode === "nav");
   joystickBase.classList.toggle("disabled", mode !== "manual");
   navPage.classList.toggle("active", mode === "nav");
   manualPage.classList.toggle("active", mode === "manual");
   pageTitle.textContent = mode === "manual" ? "手动页面" : "导航页面";
-  if (mode === "nav") {
+  if (mode === "manual" && !wasManualActive) {
+    startCameraLoop();
+  } else if (mode === "nav" && !wasNavActive) {
+    stopCameraLoop();
     window.requestAnimationFrame(() => {
       resizeCanvas();
     });
@@ -143,7 +158,7 @@ function getMapPixelFromWorld(x, y) {
   if (!state.map) {
     return { x: 0, y: 0 };
   }
-  const { width, height, resolution, origin } = state.map;
+  const { height, resolution, origin } = state.map;
   const px = (x - origin.x) / resolution;
   const py = (y - origin.y) / resolution;
   return {
@@ -179,6 +194,13 @@ function getRobotMapPixel() {
   return getMapPixelFromWorld(state.status.odom.x, state.status.odom.y);
 }
 
+function getCanvasCenter() {
+  return {
+    x: canvas.width / 2,
+    y: canvas.height / 2,
+  };
+}
+
 function getMapRotation() {
   const yaw = state.mapView.headingReferenceYaw;
   return Number.isFinite(yaw) ? yaw - Math.PI / 2 : 0;
@@ -192,55 +214,37 @@ function getScreenRobotYaw() {
   return -yaw + getMapRotation();
 }
 
-function getOffsetForMapPixelAtCanvasPoint(mapPixelX, mapPixelY, canvasX, canvasY, scale = state.mapView.scale) {
-  const robotPixel = getRobotMapPixel();
-  if (!robotPixel) {
-    return {
-      offsetX: canvasX - mapPixelX * scale,
-      offsetY: canvasY - mapPixelY * scale,
-    };
-  }
-
+function setViewCenterForMapPixelAtCanvasPoint(mapPixelX, mapPixelY, canvasX, canvasY, scale = state.mapView.scale) {
+  const canvasCenter = getCanvasCenter();
   const rotation = getMapRotation();
-  const relative = rotateVector(
-    (mapPixelX - robotPixel.x) * scale,
-    (mapPixelY - robotPixel.y) * scale,
-    rotation,
+  const relativeCanvas = rotateVector(
+    canvasX - canvasCenter.x,
+    canvasY - canvasCenter.y,
+    -rotation,
   );
 
-  return {
-    offsetX: canvasX - robotPixel.x * scale - relative.x,
-    offsetY: canvasY - robotPixel.y * scale - relative.y,
-  };
+  state.mapView.centerX = mapPixelX - relativeCanvas.x / scale;
+  state.mapView.centerY = mapPixelY - relativeCanvas.y / scale;
 }
 
 function mapPixelToCanvas(
   x,
   y,
   scale = state.mapView.scale,
-  offsetX = state.mapView.offsetX,
-  offsetY = state.mapView.offsetY,
+  centerX = state.mapView.centerX,
+  centerY = state.mapView.centerY,
 ) {
-  const robotPixel = getRobotMapPixel();
-  if (!robotPixel) {
-    return {
-      x: offsetX + x * scale,
-      y: offsetY + y * scale,
-    };
-  }
-
+  const canvasCenter = getCanvasCenter();
   const rotation = getMapRotation();
-  const baseX = offsetX + robotPixel.x * scale;
-  const baseY = offsetY + robotPixel.y * scale;
   const relative = rotateVector(
-    (x - robotPixel.x) * scale,
-    (y - robotPixel.y) * scale,
+    (x - centerX) * scale,
+    (y - centerY) * scale,
     rotation,
   );
 
   return {
-    x: baseX + relative.x,
-    y: baseY + relative.y,
+    x: canvasCenter.x + relative.x,
+    y: canvasCenter.y + relative.y,
   };
 }
 
@@ -248,25 +252,20 @@ function canvasToMapPixel(
   x,
   y,
   scale = state.mapView.scale,
-  offsetX = state.mapView.offsetX,
-  offsetY = state.mapView.offsetY,
+  centerX = state.mapView.centerX,
+  centerY = state.mapView.centerY,
 ) {
-  const robotPixel = getRobotMapPixel();
-  if (!robotPixel) {
-    return {
-      x: (x - offsetX) / scale,
-      y: (y - offsetY) / scale,
-    };
-  }
-
+  const canvasCenter = getCanvasCenter();
   const rotation = getMapRotation();
-  const baseX = offsetX + robotPixel.x * scale;
-  const baseY = offsetY + robotPixel.y * scale;
-  const relative = rotateVector(x - baseX, y - baseY, -rotation);
+  const relative = rotateVector(
+    x - canvasCenter.x,
+    y - canvasCenter.y,
+    -rotation,
+  );
 
   return {
-    x: robotPixel.x + relative.x / scale,
-    y: robotPixel.y + relative.y / scale,
+    x: centerX + relative.x / scale,
+    y: centerY + relative.y / scale,
   };
 }
 
@@ -284,6 +283,85 @@ function canvasToWorld(x, y) {
   }
   const mapPixel = canvasToMapPixel(x, y);
   return getWorldFromMapPixel(mapPixel.x, mapPixel.y);
+}
+
+function getGridCellAtMapPixel(mapPixelX, mapPixelY) {
+  if (!state.map) {
+    return null;
+  }
+
+  const gridX = Math.floor(mapPixelX);
+  const imageY = Math.floor(mapPixelY);
+  if (
+    gridX < 0 ||
+    imageY < 0 ||
+    gridX >= state.map.width ||
+    imageY >= state.map.height
+  ) {
+    return null;
+  }
+
+  const gridY = state.map.height - 1 - imageY;
+  const index = gridY * state.map.width + gridX;
+  const value = state.map.data?.[index];
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+
+  return {
+    x: gridX,
+    y: gridY,
+    value,
+  };
+}
+
+function isCellFree(cell) {
+  if (!cell) {
+    return false;
+  }
+  return cell.value >= 0 && cell.value < 15;
+}
+
+function findNearestFreeGoal(mapPixelX, mapPixelY, maxRadius = 12) {
+  if (!state.map) {
+    return null;
+  }
+
+  const baseX = Math.floor(mapPixelX);
+  const baseImageY = Math.floor(mapPixelY);
+  let bestCell = null;
+  let bestDistanceSq = Number.POSITIVE_INFINITY;
+
+  for (let radius = 0; radius <= maxRadius; radius += 1) {
+    for (let dy = -radius; dy <= radius; dy += 1) {
+      for (let dx = -radius; dx <= radius; dx += 1) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius) {
+          continue;
+        }
+
+        const cell = getGridCellAtMapPixel(baseX + dx, baseImageY + dy);
+        if (!isCellFree(cell)) {
+          continue;
+        }
+
+        const distanceSq = dx * dx + dy * dy;
+        if (distanceSq < bestDistanceSq) {
+          bestDistanceSq = distanceSq;
+          bestCell = cell;
+        }
+      }
+    }
+
+    if (bestCell) {
+      return {
+        mapPixelX: bestCell.x + 0.5,
+        mapPixelY: state.map.height - bestCell.y - 0.5,
+        world: getWorldFromMapPixel(bestCell.x + 0.5, state.map.height - bestCell.y - 0.5),
+      };
+    }
+  }
+
+  return null;
 }
 
 function getCanvasEventPoint(event) {
@@ -306,8 +384,8 @@ function beginMapPanGesture(pointerId, point, moved = false) {
     pointerId,
     startX: point.x,
     startY: point.y,
-    startOffsetX: state.mapView.offsetX,
-    startOffsetY: state.mapView.offsetY,
+    startCenterX: state.mapView.centerX,
+    startCenterY: state.mapView.centerY,
     moved,
   };
 }
@@ -356,18 +434,15 @@ function updateMapPinchGesture() {
     state.mapView.minScale,
     state.mapView.maxScale,
   );
-  const offset = getOffsetForMapPixelAtCanvasPoint(
+  state.mapView.scale = nextScale;
+  setViewCenterForMapPixelAtCanvasPoint(
     mapGesture.focusMapX,
     mapGesture.focusMapY,
     centerX,
     centerY,
     nextScale,
   );
-
-  state.mapView.scale = nextScale;
-  state.mapView.offsetX = offset.offsetX;
-  state.mapView.offsetY = offset.offsetY;
-  renderScene();
+  requestRender();
 }
 
 function getFitScale() {
@@ -390,14 +465,8 @@ function getDefaultMapScale(centerOnRobot = true) {
 }
 
 function centerMapOn(mapPixelX, mapPixelY) {
-  const offset = getOffsetForMapPixelAtCanvasPoint(
-    mapPixelX,
-    mapPixelY,
-    canvas.width / 2,
-    canvas.height / 2,
-  );
-  state.mapView.offsetX = offset.offsetX;
-  state.mapView.offsetY = offset.offsetY;
+  state.mapView.centerX = mapPixelX;
+  state.mapView.centerY = mapPixelY;
 }
 
 function resetMapView(centerOnRobot = true) {
@@ -419,10 +488,10 @@ function resetMapView(centerOnRobot = true) {
     const mapPixel = getMapPixelFromWorld(robot.x, robot.y);
     centerMapOn(mapPixel.x, mapPixel.y);
   } else {
-    state.mapView.offsetX = (canvas.width - state.map.width * state.mapView.scale) / 2;
-    state.mapView.offsetY = (canvas.height - state.map.height * state.mapView.scale) / 2;
+    state.mapView.centerX = state.map.width / 2;
+    state.mapView.centerY = state.map.height / 2;
   }
-  renderScene();
+  requestRender();
 }
 
 function syncMapView(centerWorld = null) {
@@ -450,7 +519,7 @@ function syncMapView(centerWorld = null) {
     centerMapOn(centerPixel.x, centerPixel.y);
   }
 
-  renderScene();
+  requestRender();
 }
 
 function zoomAtCanvasPoint(canvasX, canvasY, factor) {
@@ -464,16 +533,14 @@ function zoomAtCanvasPoint(canvasX, canvasY, factor) {
     state.mapView.maxScale,
   );
   state.mapView.scale = nextScale;
-  const offset = getOffsetForMapPixelAtCanvasPoint(
+  setViewCenterForMapPixelAtCanvasPoint(
     focus.x,
     focus.y,
     canvasX,
     canvasY,
     nextScale,
   );
-  state.mapView.offsetX = offset.offsetX;
-  state.mapView.offsetY = offset.offsetY;
-  renderScene();
+  requestRender();
 }
 
 function zoomMap(factor) {
@@ -486,6 +553,19 @@ function deriveGoalYaw(goal) {
     return 0.0;
   }
   return Math.atan2(goal.y - robot.y, goal.x - robot.x);
+}
+
+function hasSameMapGeometry(previousMap, nextMap) {
+  if (!previousMap || !nextMap) {
+    return false;
+  }
+  return (
+    previousMap.width === nextMap.width &&
+    previousMap.height === nextMap.height &&
+    previousMap.resolution === nextMap.resolution &&
+    previousMap.origin?.x === nextMap.origin?.x &&
+    previousMap.origin?.y === nextMap.origin?.y
+  );
 }
 
 function rebuildMapImage() {
@@ -660,28 +740,6 @@ function drawPath() {
   ctx.restore();
 }
 
-function drawScan() {
-  const odom = state.status?.odom;
-  if (!odom || !state.scan || state.scan.length === 0) {
-    return;
-  }
-
-  const cosYaw = Math.cos(odom.yaw);
-  const sinYaw = Math.sin(odom.yaw);
-
-  ctx.save();
-  ctx.fillStyle = "rgba(255, 138, 0, 0.78)";
-  state.scan.forEach((point) => {
-    const worldX = odom.x + point.x * cosYaw - point.y * sinYaw;
-    const worldY = odom.y + point.x * sinYaw + point.y * cosYaw;
-    const canvasPoint = worldToCanvas(worldX, worldY);
-    ctx.beginPath();
-    ctx.arc(canvasPoint.x, canvasPoint.y, 1.4, 0, Math.PI * 2);
-    ctx.fill();
-  });
-  ctx.restore();
-}
-
 function drawGoal() {
   const goal = state.pendingGoal || state.status?.goal;
   if (!goal) {
@@ -730,28 +788,22 @@ function renderScene() {
   if (mapImage && state.map) {
     ctx.save();
     ctx.imageSmoothingEnabled = false;
-    const robotPixel = getRobotMapPixel();
-    if (robotPixel) {
-      const robotBase = {
-        x: state.mapView.offsetX + robotPixel.x * state.mapView.scale,
-        y: state.mapView.offsetY + robotPixel.y * state.mapView.scale,
-      };
-      ctx.translate(robotBase.x, robotBase.y);
-      ctx.rotate(getMapRotation());
-      ctx.translate(-robotBase.x, -robotBase.y);
-    }
+    const canvasCenter = getCanvasCenter();
+    ctx.translate(canvasCenter.x, canvasCenter.y);
+    ctx.rotate(getMapRotation());
+    ctx.scale(state.mapView.scale, state.mapView.scale);
+    ctx.translate(-state.mapView.centerX, -state.mapView.centerY);
     ctx.drawImage(
       mapImage,
-      state.mapView.offsetX,
-      state.mapView.offsetY,
-      state.map.width * state.mapView.scale,
-      state.map.height * state.mapView.scale,
+      0,
+      0,
+      state.map.width,
+      state.map.height,
     );
     ctx.restore();
     drawMapGrid();
   }
 
-  drawScan();
   drawPath();
   drawGoal();
   drawRobot();
@@ -765,7 +817,6 @@ async function fetchStatus() {
       Number.isFinite(payload?.odom?.yaw)
     );
     state.status = payload;
-    state.scan = Array.isArray(payload.scan) ? payload.scan : [];
     if (shouldLockHeading) {
       state.mapView.headingReferenceYaw = payload.odom.yaw;
       if (state.map && state.mapView.initialized) {
@@ -791,13 +842,20 @@ async function fetchStatus() {
 
     updateStatusCards();
     setModeButtons(payload.control_mode || "nav");
-    renderScene();
+    requestRender();
   } catch (error) {
     setStatusMessage(`连接失败：${error.message}`, 3000);
   }
 }
 
 async function fetchMap() {
+  const previousMap = state.map;
+  const previousView = {
+    initialized: state.mapView.initialized,
+    scale: state.mapView.scale,
+    centerX: state.mapView.centerX,
+    centerY: state.mapView.centerY,
+  };
   const centerWorld = state.map && state.mapView.initialized
     ? canvasToWorld(canvas.width / 2, canvas.height / 2)
     : null;
@@ -807,7 +865,21 @@ async function fetchMap() {
   }
   state.map = payload.map;
   rebuildMapImage();
-  if (centerWorld) {
+
+  if (previousView.initialized && hasSameMapGeometry(previousMap, state.map)) {
+    const fitScale = getFitScale();
+    state.mapView.minScale = fitScale * 0.85;
+    state.mapView.maxScale = fitScale * 8.0;
+    state.mapView.scale = clamp(
+      previousView.scale,
+      state.mapView.minScale,
+      state.mapView.maxScale,
+    );
+    state.mapView.centerX = previousView.centerX;
+    state.mapView.centerY = previousView.centerY;
+    state.mapView.initialized = true;
+    requestRender();
+  } else if (centerWorld) {
     syncMapView(centerWorld);
   } else {
     resetMapView();
@@ -821,7 +893,7 @@ async function fetchPath() {
     return;
   }
   state.path = payload.path;
-  renderScene();
+  requestRender();
 }
 
 function updateGoalControls() {
@@ -998,9 +1070,10 @@ canvas.addEventListener("pointermove", (event) => {
   }
 
   if (mapGesture.moved) {
-    state.mapView.offsetX = mapGesture.startOffsetX + dx;
-    state.mapView.offsetY = mapGesture.startOffsetY + dy;
-    renderScene();
+    const relativeMap = rotateVector(dx, dy, -getMapRotation());
+    state.mapView.centerX = mapGesture.startCenterX - relativeMap.x / state.mapView.scale;
+    state.mapView.centerY = mapGesture.startCenterY - relativeMap.y / state.mapView.scale;
+    requestRender();
   }
 });
 
@@ -1024,7 +1097,18 @@ function finishMapGesture(event) {
     if (state.status?.control_mode === "manual") {
       setStatusMessage("当前是手动模式，先切到导航模式再选目标。", 2500);
     } else {
-      const goal = canvasToWorld(point.x, point.y);
+      const mapPixel = canvasToMapPixel(point.x, point.y);
+      const snappedGoal = findNearestFreeGoal(mapPixel.x, mapPixel.y);
+      if (!snappedGoal) {
+        setStatusMessage("这里是未知区或障碍区，请换一个空白区域选点。", 2600);
+        mapPointers.delete(event.pointerId);
+        if (mapPointers.size === 0) {
+          mapGesture = null;
+        }
+        return;
+      }
+
+      const goal = snappedGoal.world;
       state.pendingGoal = {
         x: goal.x,
         y: goal.y,
@@ -1032,7 +1116,7 @@ function finishMapGesture(event) {
       };
       state.goalPickArmed = false;
       updateStatusCards();
-      renderScene();
+      requestRender();
       setStatusMessage("候选目标已选中，请点击“确认导航”后发送。", 2500);
     }
   }
@@ -1117,7 +1201,7 @@ clearGoalButton.addEventListener("click", () => {
   state.pendingGoal = null;
   state.goalPickArmed = false;
   updateStatusCards();
-  renderScene();
+  requestRender();
   setStatusMessage("已清除候选目标。", 1200);
 });
 
@@ -1135,7 +1219,7 @@ confirmGoalButton.addEventListener("click", async () => {
     await apiPost("/api/goal", payload);
     state.pendingGoal = null;
     updateStatusCards();
-    renderScene();
+    requestRender();
     fetchStatus();
     setStatusMessage("导航目标已确认并发送。", 1800);
   } catch (error) {
@@ -1158,11 +1242,20 @@ function refreshCameraFrame() {
   cameraFrame.src = `/api/camera/frame.png?ts=${Date.now()}`;
 }
 
-function startCameraLoop() {
+function stopCameraLoop() {
   if (cameraTimer) {
     clearInterval(cameraTimer);
+    cameraTimer = null;
   }
-  cameraTimer = setInterval(refreshCameraFrame, 700);
+  cameraFrame.removeAttribute("src");
+}
+
+function startCameraLoop() {
+  if (cameraTimer || state.status?.control_mode === "nav") {
+    return;
+  }
+  cameraTimer = setInterval(refreshCameraFrame, 900);
+  refreshCameraFrame();
 }
 
 window.addEventListener("resize", resizeCanvas);
@@ -1172,5 +1265,4 @@ setModeButtons("nav");
 fetchStatus();
 fetchMap().catch(() => {});
 fetchPath().catch(() => {});
-startCameraLoop();
-setInterval(fetchStatus, 600);
+setInterval(fetchStatus, 800);

@@ -82,7 +82,6 @@ class WebControlNode(Node):
         self.goal_version = 0
         self.map_snapshot = None
         self.path_snapshot = []
-        self.scan_snapshot = []
         self.odom_snapshot = None
         self.goal_snapshot = None
         self.control_mode = "nav"
@@ -199,26 +198,8 @@ class WebControlNode(Node):
             self.last_camera_export_time = now
 
     def scan_callback(self, msg):
-        sampled = []
-        total = len(msg.ranges)
-
-        for index in range(total):
-            distance = float(msg.ranges[index])
-            if not math.isfinite(distance):
-                continue
-            if distance < float(msg.range_min) or distance > float(msg.range_max):
-                continue
-
-            angle = float(msg.angle_min) + index * float(msg.angle_increment)
-            sampled.append(
-                {
-                    "x": float(distance * math.cos(angle)),
-                    "y": float(distance * math.sin(angle)),
-                }
-            )
-
+        del msg
         with self.state_lock:
-            self.scan_snapshot = sampled
             self.last_scan_time = time.monotonic()
 
     def watchdog_callback(self):
@@ -298,7 +279,6 @@ class WebControlNode(Node):
                 "control_mode": self.control_mode,
                 "has_camera": self.camera_frame is not None,
                 "camera": self.camera_meta,
-                "scan": self.scan_snapshot,
                 "devices": {
                     "base": base_online,
                     "radar": radar_online,

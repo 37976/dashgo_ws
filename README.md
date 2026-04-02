@@ -88,7 +88,9 @@ source install/setup.bash
 export ROS_LOG_DIR=/tmp/roslogs
 ```
 
-## 启动方式
+## 快速启动
+
+默认推荐把机器人固定热点一起打开，这样手机直接连接机器人热点，再扫码进入网页控制。
 
 当前 `dashgo_robot.launch.py` 和 `dashgo_nav_real.launch.py` 已支持自动识别底盘串口和雷达串口。
 
@@ -98,91 +100,7 @@ export ROS_LOG_DIR=/tmp/roslogs
 - 换电脑或 `ttyUSB0/1` 顺序变化时，常用总启动命令通常不需要改
 - 如果机器上同时插了多块类似 USB 串口设备，仍然可以手动传 `driver_port:=...` 或 `lidar_port:=...`
 
-### 底盘单独启动
-
-```bash
-cd ~/dashgo_ws
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-ros2 launch dashgo_driver_ros2 dashgo_robot.launch.py start_lidar:=false start_d435:=false
-```
-
-### 雷达单独启动
-
-```bash
-cd ~/dashgo_ws
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-ros2 launch dashgo_lidar_ros2 rplidar_s2.launch.py
-```
-
-说明：
-
-- 这条“单独启动雷达”现在也支持自动识别雷达串口
-- 日常仍然更推荐使用 `dashgo_robot.launch.py` 或 `dashgo_nav_real.launch.py` 做整机启动
-
-### 底盘 + 雷达 + 相机
-
-```bash
-cd ~/dashgo_ws
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-export ROS_LOG_DIR=/tmp/roslogs
-ros2 launch dashgo_driver_ros2 dashgo_robot.launch.py
-```
-
-### 底盘 + 雷达
-
-```bash
-cd ~/dashgo_ws
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-export ROS_LOG_DIR=/tmp/roslogs
-ros2 launch dashgo_driver_ros2 dashgo_robot.launch.py start_d435:=false
-```
-
-### 真机导航（默认启动相机，默认启动网页控制）
-
-```bash
-cd ~/dashgo_ws
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-export ROS_LOG_DIR=/tmp/roslogs
-ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py
-```
-
-### 真机导航，不启动相机
-
-```bash
-cd ~/dashgo_ws
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-export ROS_LOG_DIR=/tmp/roslogs
-ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py start_d435:=false
-```
-
-### 真机导航，不启动 RViz
-
-```bash
-cd ~/dashgo_ws
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-export ROS_LOG_DIR=/tmp/roslogs
-ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py start_d435:=false start_nav_rviz:=false
-```
-
-### 单独启动手机网页控制
-
-```bash
-cd ~/dashgo_ws
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-ros2 launch dashgo_web_control web_control.launch.py
-```
-
-### 真机导航，同时开启机器人固定热点
-
-默认会自动选择当前可用的无线网卡，因此下面这条命令更适合作为通用启动方式：
+### 推荐命令
 
 ```bash
 cd ~/dashgo_ws
@@ -192,7 +110,63 @@ export ROS_LOG_DIR=/tmp/roslogs
 ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py start_hotspot:=true
 ```
 
-如需自定义热点名和密码：
+这条命令会同时启动：
+
+- 底盘
+- 雷达
+- D435 相机
+- 导航节点
+- 网页控制
+- 机器人固定热点
+- 二维码弹窗
+
+### 常用变体
+
+```bash
+# 不启动相机
+ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py start_hotspot:=true start_d435:=false
+# 不启动 RViz
+ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py start_hotspot:=true start_nav_rviz:=false
+# 不启动相机，也不启动 RViz
+ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py start_hotspot:=true start_d435:=false start_nav_rviz:=false
+# 这次不想开机器人热点
+ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py
+```
+
+## 其他启动方式
+
+以下命令默认沿用上面的“常用环境命令”环境。
+
+### 底盘单独启动
+
+```bash
+ros2 launch dashgo_driver_ros2 dashgo_robot.launch.py start_lidar:=false start_d435:=false
+```
+
+### 雷达单独启动
+
+```bash
+ros2 launch dashgo_lidar_ros2 rplidar_s2.launch.py
+```
+
+说明：
+
+- 这条“单独启动雷达”现在也支持自动识别雷达串口
+- 日常仍然更推荐使用 `dashgo_robot.launch.py` 或 `dashgo_nav_real.launch.py` 做整机启动
+
+### 单独启动手机网页控制
+
+```bash
+ros2 launch dashgo_web_control web_control.launch.py
+```
+
+### 单独启动手机网页控制，同时开启固定热点
+
+```bash
+ros2 launch dashgo_web_control web_control.launch.py start_hotspot:=true
+```
+
+### 自定义热点名和密码
 
 ```bash
 ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py \
@@ -260,7 +234,6 @@ http://<机器人IP>:8080
 - 导航不会因为误触立即开始，必须先“选点导航”，再点击“确认导航”
 - 手动模式下才能通过摇杆发送速度指令，导航模式下摇杆会被禁用
 - 地图支持鼠标滚轮缩放、双指缩放，以及拖拽平移
-- 网页地图会叠加显示雷达点
 - 网页相机默认读取 `/camera/camera/color/image_raw`
 - D435 相机本身不是靠固定 `/dev/videoX` 启动，而是由 `realsense2_camera` 自动发现设备
 
@@ -268,10 +241,11 @@ http://<机器人IP>:8080
 
 启动网页控制后，桌面环境下会自动弹出二维码窗口。
 
-- 默认会显示“打开网页”二维码
-- 如果启动时带了 `start_hotspot:=true`，弹窗会显示两个二维码
+- README 默认推荐使用 `start_hotspot:=true`
+- 带 `start_hotspot:=true` 启动时，弹窗会显示两个二维码
 - 左侧二维码用于手机连接机器人热点
 - 右侧二维码用于打开控制网页
+- 不带热点启动时，只显示“打开网页”二维码
 
 如果没有图形界面，程序会自动退回到终端打印网页二维码。
 
@@ -279,7 +253,8 @@ http://<机器人IP>:8080
 
 当前已经支持由机器人 Ubuntu 22 自己创建固定热点。
 
-- 热点功能默认关闭，避免一启动就切走当前网络
+- README 默认把固定热点作为推荐启动方式
+- 代码默认值仍然是 `start_hotspot:=false`，所以命令里要显式带上 `start_hotspot:=true`
 - 启动参数 `start_hotspot:=true` 后，会先自动打开 Wi-Fi，再拉起热点
 - 默认会自动选择当前可用的无线网卡，不依赖固定网卡名
 - 默认连接名为 `dashgo-hotspot`

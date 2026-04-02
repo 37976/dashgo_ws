@@ -3,18 +3,14 @@
 import os
 import re
 import subprocess
+import time
+import urllib.error
+import urllib.request
 
 from dashgo_web_control.qr_utils import make_qr_matrix
 
 
-def detect_best_host(host):
-    if host and host not in ("0.0.0.0", "::", ""):
-        return host
-
-    env_host = os.environ.get("DASHGO_WEB_UI_IP")
-    if env_host:
-        return env_host
-
+def list_global_ipv4_addresses():
     try:
         result = subprocess.run(
             ["ip", "-4", "-o", "addr", "show", "up", "scope", "global"],
@@ -35,8 +31,24 @@ def detect_best_host(host):
             if_name, ip_addr = match.groups()
             if ip_addr.startswith("127."):
                 continue
-            score = interface_priority(if_name)
-            candidates.append((score, if_name, ip_addr))
+            candidates.append((if_name, ip_addr))
+    return candidates
+
+
+def detect_best_host(host, require_wifi=False):
+    if host and host not in ("0.0.0.0", "::", ""):
+        return host
+
+    env_host = os.environ.get("DASHGO_WEB_UI_IP")
+    if env_host:
+        return env_host
+
+    candidates = []
+    for if_name, ip_addr in list_global_ipv4_addresses():
+        score = interface_priority(if_name)
+        if require_wifi and score != 0:
+            continue
+        candidates.append((score, if_name, ip_addr))
 
     if candidates:
         candidates.sort(key=lambda item: (item[0], item[1]))
@@ -55,6 +67,55 @@ def interface_priority(if_name):
 
 def build_web_url(host, port):
     resolved_host = detect_best_host(host)
+    return f"http://{resolved_host}:{port}"
+
+
+def wait_for_best_host(host, require_wifi=False, timeout_sec=20.0):
+    if host and host not in ("0.0.0.0", "::", ""):
+        return host
+
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        resolved_host = detect_best_host(host, require_wifi=require_wifi)
+        if resolved_host != "127.0.0.1":
+            return resolved_host
+        time.sleep(0.3)
+
+    return detect_best_host(host, require_wifi=require_wifi)
+
+
+def wait_for_http_ready(host, port, timeout_sec=20.0):
+    probe_host = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
+    deadline = time.monotonic() + timeout_sec
+    last_error = None
+
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(
+                f"http://{probe_host}:{port}/api/status",
+                timeout=1.5,
+            ) as response:
+                if 200 <= response.status < 300:
+                    return
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            last_error = exc
+            time.sleep(0.3)
+
+    if last_error:
+        raise RuntimeError(f"Web UI is not ready yet: {last_error}")
+
+
+def wait_for_web_url(host, port, hotspot_enabled=False, timeout_sec=20.0):
+    resolved_host = wait_for_best_host(
+        host,
+        require_wifi=hotspot_enabled,
+        timeout_sec=timeout_sec,
+    )
+    wait_for_http_ready(host, port, timeout_sec=timeout_sec)
+
+    if hotspot_enabled:
+        time.sleep(1.0)
+
     return f"http://{resolved_host}:{port}"
 
 
@@ -88,8 +149,12 @@ def render_terminal_qr(matrix):
     return "\n".join(lines)
 
 
-def print_web_qr(host, port):
-    url = build_web_url(host, port)
+def print_web_qr(host, port, hotspot_enabled=False):
+    try:
+        url = wait_for_web_url(host, port, hotspot_enabled=hotspot_enabled)
+    except RuntimeError as exc:
+        print(f"Web UI readiness check timed out, falling back to current address guess: {exc}")
+        url = build_web_url(host, port)
     matrix = make_matrix(url)
     print("")
     print("=" * 60)
@@ -103,7 +168,8 @@ def print_web_qr(host, port):
 def main():
     host = os.environ.get("DASHGO_WEB_UI_HOST", "0.0.0.0")
     port = os.environ.get("DASHGO_WEB_UI_PORT", "8080")
-    print_web_qr(host, port)
+    hotspot_enabled = os.environ.get("DASHGO_HOTSPOT_ENABLED", "").lower() in {"1", "true", "yes"}
+    print_web_qr(host, port, hotspot_enabled=hotspot_enabled)
 
 
 if __name__ == "__main__":

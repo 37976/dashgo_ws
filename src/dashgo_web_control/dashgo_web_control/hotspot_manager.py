@@ -127,8 +127,6 @@ def ensure_hotspot_connection(connection_name, ifname, ssid, password):
     )
 
     run_command(["nmcli", "connection", "up", connection_name])
-
-
 def get_ipv4_address(ifname):
     result = run_command(
         ["ip", "-4", "-o", "addr", "show", "dev", ifname],

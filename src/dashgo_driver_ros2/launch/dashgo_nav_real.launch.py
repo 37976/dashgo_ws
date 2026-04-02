@@ -195,7 +195,8 @@ def generate_launch_description():
                         "accumulate_pointcloud_obstacles": False,
                         "min_height": 0.0,
                         "max_height": 1.0,
-                        "obstacle_radius": 0.20,
+                        "obstacle_radius": 0.08,
+                        "clear_radius": 0.20,
                         "projection_gap_fill_cells": 1,
                     }
                 ],
