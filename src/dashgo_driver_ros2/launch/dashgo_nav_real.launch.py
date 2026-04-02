@@ -1,21 +1,31 @@
+import glob
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction, TimerAction
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, TimerAction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from dashgo_web_control.show_web_qr import print_web_qr
 
 
-def print_web_qr_action(context):
-    print_web_qr(
-        LaunchConfiguration("web_host").perform(context),
-        LaunchConfiguration("web_port").perform(context),
+def resolve_qr_popup_script():
+    matches = glob.glob(
+        os.path.join(
+            get_package_share_directory("dashgo_web_control"),
+            "..",
+            "..",
+            "lib",
+            "python*",
+            "site-packages",
+            "dashgo_web_control",
+            "show_web_qr_popup.py",
+        )
     )
-    return []
+    if not matches:
+        raise FileNotFoundError("Unable to locate show_web_qr_popup.py")
+    return matches[0]
 
 
 def generate_launch_description():
@@ -210,7 +220,19 @@ def generate_launch_description():
             TimerAction(
                 period=1.5,
                 condition=IfCondition(start_web_ui),
-                actions=[OpaqueFunction(function=print_web_qr_action)],
+                actions=[
+                    ExecuteProcess(
+                        cmd=[
+                            "python3",
+                            resolve_qr_popup_script(),
+                        ],
+                        additional_env={
+                            "DASHGO_WEB_UI_HOST": web_host,
+                            "DASHGO_WEB_UI_PORT": web_port,
+                        },
+                        output="screen",
+                    ),
+                ],
             ),
         ]
     )

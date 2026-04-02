@@ -1,16 +1,29 @@
+import glob
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction, TimerAction
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, TimerAction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from dashgo_web_control.show_web_qr import print_web_qr
 
 
-def print_web_qr_action(context):
-    print_web_qr(
-        LaunchConfiguration("host").perform(context),
-        LaunchConfiguration("port").perform(context),
+def resolve_qr_popup_script():
+    matches = glob.glob(
+        os.path.join(
+            get_package_share_directory("dashgo_web_control"),
+            "..",
+            "..",
+            "lib",
+            "python*",
+            "site-packages",
+            "dashgo_web_control",
+            "show_web_qr_popup.py",
+        )
     )
-    return []
+    if not matches:
+        raise FileNotFoundError("Unable to locate show_web_qr_popup.py")
+    return matches[0]
 
 
 def generate_launch_description():
@@ -34,7 +47,19 @@ def generate_launch_description():
             ),
             TimerAction(
                 period=1.5,
-                actions=[OpaqueFunction(function=print_web_qr_action)],
+                actions=[
+                    ExecuteProcess(
+                        cmd=[
+                            "python3",
+                            resolve_qr_popup_script(),
+                        ],
+                        additional_env={
+                            "DASHGO_WEB_UI_HOST": LaunchConfiguration("host"),
+                            "DASHGO_WEB_UI_PORT": LaunchConfiguration("port"),
+                        },
+                        output="screen",
+                    ),
+                ],
             ),
         ]
     )
