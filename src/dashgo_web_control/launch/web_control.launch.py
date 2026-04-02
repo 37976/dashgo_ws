@@ -1,7 +1,16 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, TimerAction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from dashgo_web_control.show_web_qr import print_web_qr
+
+
+def print_web_qr_action(context):
+    print_web_qr(
+        LaunchConfiguration("host").perform(context),
+        LaunchConfiguration("port").perform(context),
+    )
+    return []
 
 
 def generate_launch_description():
@@ -22,6 +31,10 @@ def generate_launch_description():
                         "image_topic": LaunchConfiguration("image_topic"),
                     }
                 ],
+            ),
+            TimerAction(
+                period=1.5,
+                actions=[OpaqueFunction(function=print_web_qr_action)],
             ),
         ]
     )
