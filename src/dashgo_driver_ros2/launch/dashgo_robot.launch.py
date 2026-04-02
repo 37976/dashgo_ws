@@ -1,8 +1,9 @@
 import os
 
 from ament_index_python.packages import get_package_share_directory
+from dashgo_driver_ros2.device_resolver import resolve_serial_ports
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -40,6 +41,7 @@ def static_tf_node(
 
 
 def generate_launch_description():
+    resolved_ports = resolve_serial_ports()
     driver_share = get_package_share_directory("dashgo_driver_ros2")
     lidar_share = get_package_share_directory("dashgo_lidar_ros2")
     realsense_share = get_package_share_directory("dashgo_realsense_ros2")
@@ -78,7 +80,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "driver_port",
-                default_value="/dev/ttyUSB1",
+                default_value=resolved_ports["driver_port"],
                 description="Serial port for the Dashgo base controller.",
             ),
             DeclareLaunchArgument(
@@ -88,11 +90,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "lidar_port",
-                default_value=(
-                    "/dev/serial/by-id/"
-                    "usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_"
-                    "d8a678826473ed11a4766aeefdf7b791-if00-port0"
-                ),
+                default_value=resolved_ports["lidar_port"],
                 description="Serial port for the lidar.",
             ),
             DeclareLaunchArgument(
@@ -164,6 +162,8 @@ def generate_launch_description():
                     },
                 ],
             ),
+            LogInfo(msg=f"Dashgo auto-detected base port default: {resolved_ports['driver_port']}"),
+            LogInfo(msg=f"Dashgo auto-detected lidar port default: {resolved_ports['lidar_port']}"),
             static_tf_node(
                 "base_link_to_sonar0",
                 base_frame,

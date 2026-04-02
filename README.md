@@ -90,13 +90,21 @@ export ROS_LOG_DIR=/tmp/roslogs
 
 ## 启动方式
 
+当前 `dashgo_robot.launch.py` 和 `dashgo_nav_real.launch.py` 已支持自动识别底盘串口和雷达串口。
+
+- 底盘优先识别 CH340/CH341 控制板
+- 雷达优先识别 CP210x 串口设备
+- 优先使用 `/dev/serial/by-id/` 这类更稳定的路径
+- 换电脑或 `ttyUSB0/1` 顺序变化时，常用总启动命令通常不需要改
+- 如果机器上同时插了多块类似 USB 串口设备，仍然可以手动传 `driver_port:=...` 或 `lidar_port:=...`
+
 ### 底盘单独启动
 
 ```bash
 cd ~/dashgo_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-ros2 run dashgo_driver_ros2 dashgo_driver_node --ros-args -p port:=/dev/ttyUSB1 -p baud:=115200
+ros2 launch dashgo_driver_ros2 dashgo_robot.launch.py start_lidar:=false start_d435:=false
 ```
 
 ### 雷达单独启动
@@ -107,6 +115,11 @@ source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 launch dashgo_lidar_ros2 rplidar_s2.launch.py
 ```
+
+说明：
+
+- 这条“单独启动雷达”现在也支持自动识别雷达串口
+- 日常仍然更推荐使用 `dashgo_robot.launch.py` 或 `dashgo_nav_real.launch.py` 做整机启动
 
 ### 底盘 + 雷达 + 相机
 
@@ -169,14 +182,14 @@ ros2 launch dashgo_web_control web_control.launch.py
 
 ### 真机导航，同时开启机器人固定热点
 
-这台机器当前无线网卡是 `wlp13s0`，如需让机器人自己发热点，推荐显式指定：
+默认会自动选择当前可用的无线网卡，因此下面这条命令更适合作为通用启动方式：
 
 ```bash
 cd ~/dashgo_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 export ROS_LOG_DIR=/tmp/roslogs
-ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py start_hotspot:=true hotspot_ifname:=wlp13s0
+ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py start_hotspot:=true
 ```
 
 如需自定义热点名和密码：
@@ -184,9 +197,21 @@ ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py start_hotspot:=true hot
 ```bash
 ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py \
   start_hotspot:=true \
-  hotspot_ifname:=wlp13s0 \
   hotspot_ssid:=Dashgo-Robot \
   hotspot_password:=dashgo12345
+```
+
+如果你换了电脑，或者这块移动硬盘插到另一台机器上，网卡名可能会从 `wlp13s0` 变成别的值。这种情况下通常不用改命令，因为程序会自动找可用 Wi-Fi 网卡。
+
+只有在下面两种情况，才建议手动指定 `hotspot_ifname`：
+
+- 机器上同时有多块无线网卡，自动选择到了错误网卡
+- 你明确知道要固定使用某一块无线网卡
+
+手动指定示例：
+
+```bash
+ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py start_hotspot:=true hotspot_ifname:=wlp13s0
 ```
 
 ## 常用检查命令
@@ -236,6 +261,8 @@ http://<机器人IP>:8080
 - 手动模式下才能通过摇杆发送速度指令，导航模式下摇杆会被禁用
 - 地图支持鼠标滚轮缩放、双指缩放，以及拖拽平移
 - 网页地图会叠加显示雷达点
+- 网页相机默认读取 `/camera/camera/color/image_raw`
+- D435 相机本身不是靠固定 `/dev/videoX` 启动，而是由 `realsense2_camera` 自动发现设备
 
 ### 二维码弹窗
 
@@ -254,6 +281,7 @@ http://<机器人IP>:8080
 
 - 热点功能默认关闭，避免一启动就切走当前网络
 - 启动参数 `start_hotspot:=true` 后，会先自动打开 Wi-Fi，再拉起热点
+- 默认会自动选择当前可用的无线网卡，不依赖固定网卡名
 - 默认连接名为 `dashgo-hotspot`
 - 默认热点名为 `Dashgo-Robot`
 - 默认密码为 `dashgo12345`

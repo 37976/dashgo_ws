@@ -2,8 +2,9 @@ import glob
 import os
 
 from ament_index_python.packages import get_package_share_directory
+from dashgo_driver_ros2.device_resolver import resolve_serial_ports
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, TimerAction
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, LogInfo, TimerAction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -47,6 +48,7 @@ def resolve_hotspot_script():
 
 
 def generate_launch_description():
+    resolved_ports = resolve_serial_ports()
     driver_share = get_package_share_directory("dashgo_driver_ros2")
     nav_share_dir = get_package_share_directory("nav_slam")
     default_nav_map = os.path.join(nav_share_dir, "map", "gpt.yaml")
@@ -91,14 +93,10 @@ def generate_launch_description():
             DeclareLaunchArgument("start_web_ui", default_value="true"),
             DeclareLaunchArgument("start_hotspot", default_value="false"),
             DeclareLaunchArgument("publish_robot_model", default_value="true"),
-            DeclareLaunchArgument("driver_port", default_value="/dev/ttyUSB1"),
+            DeclareLaunchArgument("driver_port", default_value=resolved_ports["driver_port"]),
             DeclareLaunchArgument(
                 "lidar_port",
-                default_value=(
-                    "/dev/serial/by-id/"
-                    "usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_"
-                    "d8a678826473ed11a4766aeefdf7b791-if00-port0"
-                ),
+                default_value=resolved_ports["lidar_port"],
             ),
             DeclareLaunchArgument("nav_map_yaml", default_value=default_nav_map),
             DeclareLaunchArgument("base_frame", default_value="base_footprint"),
@@ -131,6 +129,8 @@ def generate_launch_description():
                     "publish_sonar_tf": "false",
                 }.items(),
             ),
+            LogInfo(msg=f"Dashgo auto-detected base port default: {resolved_ports['driver_port']}"),
+            LogInfo(msg=f"Dashgo auto-detected lidar port default: {resolved_ports['lidar_port']}"),
             Node(
                 package="robot_state_publisher",
                 executable="robot_state_publisher",
