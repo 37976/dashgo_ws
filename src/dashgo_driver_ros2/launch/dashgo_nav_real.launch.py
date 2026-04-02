@@ -87,7 +87,7 @@ def generate_launch_description():
             DeclareLaunchArgument("start_nav", default_value="true"),
             DeclareLaunchArgument("start_nav_rviz", default_value="true"),
             DeclareLaunchArgument("start_lidar", default_value="true"),
-            DeclareLaunchArgument("start_d435", default_value="false"),
+            DeclareLaunchArgument("start_d435", default_value="true"),
             DeclareLaunchArgument("start_web_ui", default_value="true"),
             DeclareLaunchArgument("start_hotspot", default_value="false"),
             DeclareLaunchArgument("publish_robot_model", default_value="true"),

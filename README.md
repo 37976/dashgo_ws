@@ -128,7 +128,7 @@ export ROS_LOG_DIR=/tmp/roslogs
 ros2 launch dashgo_driver_ros2 dashgo_robot.launch.py start_d435:=false
 ```
 
-### 真机导航（默认不启动相机，默认启动网页控制）
+### 真机导航（默认启动相机，默认启动网页控制）
 
 ```bash
 cd ~/dashgo_ws
@@ -138,14 +138,14 @@ export ROS_LOG_DIR=/tmp/roslogs
 ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py
 ```
 
-### 真机导航，启动相机
+### 真机导航，不启动相机
 
 ```bash
 cd ~/dashgo_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 export ROS_LOG_DIR=/tmp/roslogs
-ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py start_d435:=true
+ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py start_d435:=false
 ```
 
 ### 真机导航，不启动 RViz
