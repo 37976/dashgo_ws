@@ -81,7 +81,6 @@ def generate_launch_description():
     web_map_publish_hz = LaunchConfiguration("web_map_publish_hz")
     web_camera_publish_hz = LaunchConfiguration("web_camera_publish_hz")
     web_camera_max_width = LaunchConfiguration("web_camera_max_width")
-    web_camera_jpeg_quality = LaunchConfiguration("web_camera_jpeg_quality")
     hotspot_connection_name = LaunchConfiguration("hotspot_connection_name")
     hotspot_ssid = LaunchConfiguration("hotspot_ssid")
     hotspot_password = LaunchConfiguration("hotspot_password")
@@ -112,9 +111,8 @@ def generate_launch_description():
             DeclareLaunchArgument("web_port", default_value="8080"),
             DeclareLaunchArgument("web_image_topic", default_value="/camera/camera/color/image_raw"),
             DeclareLaunchArgument("web_map_publish_hz", default_value="2.0"),
-            DeclareLaunchArgument("web_camera_publish_hz", default_value="30.0"),
+            DeclareLaunchArgument("web_camera_publish_hz", default_value="12.0"),
             DeclareLaunchArgument("web_camera_max_width", default_value="320"),
-            DeclareLaunchArgument("web_camera_jpeg_quality", default_value="55"),
             DeclareLaunchArgument("hotspot_connection_name", default_value="dashgo-hotspot"),
             DeclareLaunchArgument("hotspot_ssid", default_value="Dashgo-Robot"),
             DeclareLaunchArgument("hotspot_password", default_value="dashgo12345"),
@@ -253,7 +251,6 @@ def generate_launch_description():
                         "map_publish_hz": web_map_publish_hz,
                         "camera_publish_hz": web_camera_publish_hz,
                         "camera_max_width": web_camera_max_width,
-                        "camera_jpeg_quality": web_camera_jpeg_quality,
                         "robot_radius": 0.20,
                     }
                 ],
