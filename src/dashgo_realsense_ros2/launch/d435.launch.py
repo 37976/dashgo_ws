@@ -13,6 +13,8 @@ def generate_launch_description():
     camera_namespace = LaunchConfiguration("camera_namespace")
     publish_model = LaunchConfiguration("publish_model")
     use_rviz = LaunchConfiguration("use_rviz")
+    color_profile = LaunchConfiguration("color_profile")
+    depth_profile = LaunchConfiguration("depth_profile")
 
     try:
         rs_launch = get_package_share_directory("realsense2_camera") + "/launch/rs_launch.py"
@@ -49,6 +51,8 @@ def generate_launch_description():
             DeclareLaunchArgument("camera_namespace", default_value="camera"),
             DeclareLaunchArgument("publish_model", default_value="false"),
             DeclareLaunchArgument("use_rviz", default_value="false"),
+            DeclareLaunchArgument("color_profile", default_value="640,480,30"),
+            DeclareLaunchArgument("depth_profile", default_value="640,480,30"),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(rs_launch),
                 launch_arguments={
@@ -61,8 +65,8 @@ def generate_launch_description():
                     "enable_infra2": "false",
                     "enable_gyro": "false",
                     "enable_accel": "false",
-                    "rgb_camera.color_profile": "640,480,6",
-                    "depth_module.depth_profile": "640,480,6",
+                    "rgb_camera.color_profile": color_profile,
+                    "depth_module.depth_profile": depth_profile,
                     "enable_pointcloud": "false",
                     "align_depth": "false",
                     "initial_reset": "true",

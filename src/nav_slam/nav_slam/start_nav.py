@@ -78,21 +78,25 @@ class PathFollowingNode(Node):
 
     def mode_callback(self, msg):
         new_mode = msg.data.strip().lower()
-        if new_mode not in ("manual", "nav"):
+        if new_mode not in ("manual", "nav", "pause"):
             self.get_logger().warn(f"Unknown control mode: {msg.data}")
             return
 
         if new_mode == self.control_mode:
             return
 
+        previous_mode = self.control_mode
         self.control_mode = new_mode
-        self.path_points = None
-        self.path_received = False
+
+        if new_mode == "manual":
+            self.path_points = None
+            self.path_received = False
         self.stop_robot()
-        self.get_logger().info(f"Control mode switched to: {self.control_mode}")
+        self.get_logger().info(
+            f"Control mode switched: {previous_mode} -> {self.control_mode}")
 
     def path_callback(self, msg):
-        if self.control_mode != "nav":
+        if self.control_mode == "manual":
             return
 
         self.path_points_list = [[p.pose.position.x, p.pose.position.y] for p in msg.poses]
@@ -153,8 +157,7 @@ class PathFollowingNode(Node):
             self.cmd_vel_publisher.publish(cmd_vel_msg)
 
     def odometry_callback(self, msg):
-        if self.control_mode != "nav":
-            self.stop_robot()
+        if self.control_mode in ("manual", "pause"):
             return
 
         if not self.path_received or self.path_points is None:

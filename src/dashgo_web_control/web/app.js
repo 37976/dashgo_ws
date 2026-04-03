@@ -36,8 +36,6 @@ const stopButton = document.getElementById("stop-button");
 const refreshMapButton = document.getElementById("refresh-map-button");
 const manualModeButton = document.getElementById("manual-mode-button");
 const navModeButton = document.getElementById("nav-mode-button");
-const zoomInButton = document.getElementById("zoom-in-button");
-const zoomOutButton = document.getElementById("zoom-out-button");
 const fitMapButton = document.getElementById("fit-map-button");
 const pickGoalButton = document.getElementById("pick-goal-button");
 const clearGoalButton = document.getElementById("clear-goal-button");
@@ -50,10 +48,15 @@ const radarDot = document.getElementById("radar-dot");
 const baseDot = document.getElementById("base-dot");
 const cameraDot = document.getElementById("camera-dot");
 const DEFAULT_LOCAL_VIEW_SCALE_FACTOR = 2.4;
+const JOYSTICK_SNAP_MIN_MAGNITUDE = 0.18;
+const JOYSTICK_SNAP_COS_THRESHOLD = Math.cos(Math.PI / 10);
+const JOYSTICK_SNAP_STRENGTH = 0.38;
 let joystickPointerId = null;
 let joystickCenter = null;
 let joystickRadius = 0;
 let cmdVelTimer = null;
+let cmdVelLoop = null;
+let cmdVelRequestInFlight = false;
 let lastCmd = { linear: 0, angular: 0 };
 let mapGesture = null;
 let mapPointers = new Map();
@@ -133,15 +136,16 @@ function resizeCanvas() {
 function setModeButtons(mode) {
   const wasManualActive = manualPage.classList.contains("active");
   const wasNavActive = navPage.classList.contains("active");
-  manualModeButton.classList.toggle("active", mode === "manual");
-  navModeButton.classList.toggle("active", mode === "nav");
+  const isManual = mode === "manual";
+  manualModeButton.classList.toggle("active", isManual);
+  navModeButton.classList.toggle("active", !isManual);
   joystickBase.classList.toggle("disabled", mode !== "manual");
-  navPage.classList.toggle("active", mode === "nav");
-  manualPage.classList.toggle("active", mode === "manual");
-  pageTitle.textContent = mode === "manual" ? "手动页面" : "导航页面";
-  if (mode === "manual" && !wasManualActive) {
+  navPage.classList.toggle("active", !isManual);
+  manualPage.classList.toggle("active", isManual);
+  pageTitle.textContent = isManual ? "手动页面" : "导航页面";
+  if (isManual && !wasManualActive) {
     startCameraLoop();
-  } else if (mode === "nav" && !wasNavActive) {
+  } else if (!isManual && !wasNavActive) {
     stopCameraLoop();
     window.requestAnimationFrame(() => {
       resizeCanvas();
@@ -907,6 +911,7 @@ function updateStatusCards() {
   const odom = state.status?.odom;
   const goal = state.pendingGoal || state.status?.goal;
   const mode = state.status?.control_mode || "nav";
+  const isPaused = mode === "pause";
   const devices = state.status?.devices || {};
 
   poseText.textContent = odom
@@ -930,8 +935,15 @@ function updateStatusCards() {
     cameraStatus.textContent = "等待相机";
   }
 
-  modeText.textContent = mode === "manual" ? "手动" : "导航";
-  setStatusDot(modeDot, true, mode === "manual" ? "manual" : "nav");
+  if (mode === "manual" && devices.camera) {
+    startCameraLoop();
+  } else if (mode !== "manual" || !devices.camera) {
+    stopCameraLoop();
+  }
+
+  stopButton.textContent = mode === "manual" ? "急停" : isPaused ? "继续" : "暂停";
+  modeText.textContent = mode === "manual" ? "手动" : isPaused ? "暂停" : "导航";
+  setStatusDot(modeDot, true, mode === "manual" || isPaused ? "manual" : "nav");
   setStatusDot(radarDot, Boolean(devices.radar));
   setStatusDot(baseDot, Boolean(devices.base));
   setStatusDot(cameraDot, Boolean(devices.camera));
@@ -953,6 +965,80 @@ function setJoystickPosition(nx, ny) {
   joystickKnob.style.transform = `translate(calc(-50% + ${x}px), calc(-50% + ${y}px))`;
 }
 
+function applyJoystickSnap(nx, ny) {
+  const magnitude = Math.hypot(nx, ny);
+  if (magnitude < JOYSTICK_SNAP_MIN_MAGNITUDE) {
+    return { nx, ny };
+  }
+
+  const unitX = nx / magnitude;
+  const unitY = ny / magnitude;
+  const targets = [
+    { x: 1, y: 0 },
+    { x: -1, y: 0 },
+    { x: 0, y: 1 },
+    { x: 0, y: -1 },
+  ];
+
+  let bestTarget = null;
+  let bestDot = -Infinity;
+  for (const target of targets) {
+    const dot = unitX * target.x + unitY * target.y;
+    if (dot > bestDot) {
+      bestDot = dot;
+      bestTarget = target;
+    }
+  }
+
+  if (!bestTarget || bestDot < JOYSTICK_SNAP_COS_THRESHOLD) {
+    return { nx, ny };
+  }
+
+  const blend = ((bestDot - JOYSTICK_SNAP_COS_THRESHOLD) / (1 - JOYSTICK_SNAP_COS_THRESHOLD)) * JOYSTICK_SNAP_STRENGTH;
+  const mixX = unitX * (1 - blend) + bestTarget.x * blend;
+  const mixY = unitY * (1 - blend) + bestTarget.y * blend;
+  const mixMagnitude = Math.hypot(mixX, mixY) || 1;
+
+  return {
+    nx: (mixX / mixMagnitude) * magnitude,
+    ny: (mixY / mixMagnitude) * magnitude,
+  };
+}
+
+async function flushCmdVel() {
+  if (state.status?.control_mode !== "manual") {
+    return;
+  }
+  if (cmdVelRequestInFlight) {
+    return;
+  }
+  cmdVelRequestInFlight = true;
+  try {
+    await apiPost("/api/cmd_vel", lastCmd);
+  } catch (error) {
+    setStatusMessage(`速度指令发送失败：${error.message}`, 3000);
+  } finally {
+    cmdVelRequestInFlight = false;
+  }
+}
+
+function ensureCmdVelLoop() {
+  if (cmdVelLoop) {
+    return;
+  }
+  cmdVelLoop = setInterval(() => {
+    flushCmdVel();
+  }, 120);
+}
+
+function stopCmdVelLoop() {
+  if (!cmdVelLoop) {
+    return;
+  }
+  clearInterval(cmdVelLoop);
+  cmdVelLoop = null;
+}
+
 function queueCmdVel(linear, angular) {
   if (state.status?.control_mode !== "manual") {
     return;
@@ -961,20 +1047,17 @@ function queueCmdVel(linear, angular) {
   if (cmdVelTimer) {
     return;
   }
-  cmdVelTimer = setTimeout(async () => {
+  cmdVelTimer = setTimeout(() => {
     cmdVelTimer = null;
-    try {
-      await apiPost("/api/cmd_vel", lastCmd);
-    } catch (error) {
-      setStatusMessage(`速度指令发送失败：${error.message}`, 3000);
-    }
-  }, 90);
+    flushCmdVel();
+  }, 60);
 }
 
 function resetJoystick() {
+  stopCmdVelLoop();
   setJoystickPosition(0, 0);
   lastCmd = { linear: 0, angular: 0 };
-  apiPost("/api/stop", {}).catch(() => {});
+  apiPost("/api/hold", {}).catch(() => {});
 }
 
 function onJoystickMove(clientX, clientY) {
@@ -982,8 +1065,9 @@ function onJoystickMove(clientX, clientY) {
   const dy = clientY - joystickCenter.y;
   const distance = Math.hypot(dx, dy) || 1;
   const scale = Math.min(1, joystickRadius / distance);
-  const nx = (dx * scale) / joystickRadius;
-  const ny = (dy * scale) / joystickRadius;
+  const rawNx = (dx * scale) / joystickRadius;
+  const rawNy = (dy * scale) / joystickRadius;
+  const { nx, ny } = applyJoystickSnap(rawNx, rawNy);
 
   setJoystickPosition(nx, ny);
 
@@ -999,6 +1083,7 @@ joystickBase.addEventListener("pointerdown", (event) => {
   }
   joystickPointerId = event.pointerId;
   getJoystickMetrics();
+  ensureCmdVelLoop();
   joystickBase.setPointerCapture(event.pointerId);
   onJoystickMove(event.clientX, event.clientY);
 });
@@ -1136,14 +1221,35 @@ function finishMapGesture(event) {
 canvas.addEventListener("pointerup", finishMapGesture);
 canvas.addEventListener("pointercancel", finishMapGesture);
 
-stopButton.addEventListener("click", () => {
-  apiPost("/api/stop", {}).catch(() => {});
+stopButton.addEventListener("click", async () => {
+  try {
+    if (state.status?.control_mode === "manual") {
+      await apiPost("/api/hold", {});
+      resetJoystick();
+      setStatusMessage("已急停并清空手动速度。", 1800);
+      return;
+    }
+
+    const response = await apiPost("/api/stop", {});
+    state.goalPickArmed = false;
+    if (state.status && response?.mode) {
+      state.status.control_mode = response.mode;
+    }
+    resetJoystick();
+    updateStatusCards();
+    setStatusMessage(
+      response?.mode === "pause" ? "已暂停当前导航。" : "已继续当前导航。",
+      2200,
+    );
+  } catch (error) {
+    setStatusMessage(`暂停失败：${error.message}`, 3000);
+  }
 });
 
 manualModeButton.addEventListener("click", async () => {
   try {
     await apiPost("/api/mode", { mode: "manual" });
-    await apiPost("/api/stop", {});
+    await apiPost("/api/hold", {});
     if (state.status) {
       state.status.control_mode = "manual";
     }
@@ -1169,18 +1275,6 @@ navModeButton.addEventListener("click", async () => {
     setStatusMessage(`切换导航模式失败：${error.message}`, 3000);
   }
 });
-
-if (zoomInButton) {
-  zoomInButton.addEventListener("click", () => {
-    zoomMap(1.2);
-  });
-}
-
-if (zoomOutButton) {
-  zoomOutButton.addEventListener("click", () => {
-    zoomMap(1 / 1.2);
-  });
-}
 
 fitMapButton.addEventListener("click", () => {
   resetMapView();
@@ -1239,30 +1333,58 @@ function refreshCameraFrame() {
     cameraStatus.textContent = "等待相机";
     return;
   }
-  cameraFrame.src = `/api/camera/frame.png?ts=${Date.now()}`;
+  if (cameraFrame.src.includes("/api/camera/stream.mjpg")) {
+    return;
+  }
+  cameraFrame.src = `/api/camera/stream.mjpg?ts=${Date.now()}`;
 }
 
 function stopCameraLoop() {
   if (cameraTimer) {
-    clearInterval(cameraTimer);
+    clearTimeout(cameraTimer);
     cameraTimer = null;
   }
   cameraFrame.removeAttribute("src");
 }
 
 function startCameraLoop() {
-  if (cameraTimer || state.status?.control_mode === "nav") {
+  if (state.status?.control_mode !== "manual") {
     return;
   }
-  cameraTimer = setInterval(refreshCameraFrame, 900);
   refreshCameraFrame();
 }
 
-window.addEventListener("resize", resizeCanvas);
+function queueNextCameraFrame(delayMs = 0) {
+  if (cameraTimer) {
+    clearTimeout(cameraTimer);
+  }
+  cameraTimer = setTimeout(() => {
+    cameraTimer = null;
+    refreshCameraFrame();
+  }, delayMs);
+}
+
+cameraFrame.addEventListener("load", () => {
+  if (cameraTimer) {
+    clearTimeout(cameraTimer);
+    cameraTimer = null;
+  }
+});
+
+cameraFrame.addEventListener("error", () => {
+  if (state.status?.control_mode === "manual") {
+    cameraFrame.removeAttribute("src");
+    queueNextCameraFrame(500);
+  }
+});
+
+window.addEventListener("resize", () => {
+  resizeCanvas();
+});
 
 resizeCanvas();
 setModeButtons("nav");
 fetchStatus();
 fetchMap().catch(() => {});
 fetchPath().catch(() => {});
-setInterval(fetchStatus, 800);
+setInterval(fetchStatus, 250);

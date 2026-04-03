@@ -274,6 +274,65 @@ body {
   align-items: stretch;
 }
 
+.radar-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  grid-column: 1 / -1;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(235, 244, 253, 0.82), rgba(255, 255, 255, 0.94));
+}
+
+.radar-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.radar-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  background: rgba(214, 66, 66, 0.10);
+  color: var(--danger);
+}
+
+.radar-badge.online {
+  background: rgba(36, 179, 107, 0.12);
+  color: var(--good);
+}
+
+.radar-badge.offline {
+  background: rgba(214, 66, 66, 0.10);
+  color: var(--danger);
+}
+
+.radar-canvas {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background:
+    radial-gradient(circle at center, rgba(255, 255, 255, 0.98) 0%, rgba(236, 244, 252, 0.96) 58%, rgba(219, 232, 246, 0.98) 100%);
+}
+
+.radar-caption {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .joystick-card {
   display: flex;
   flex-direction: column;
@@ -449,7 +508,7 @@ body {
   }
 
   .map-header-actions {
-    justify-content: stretch;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .stop-button {
@@ -523,6 +582,7 @@ body {
 
   .map-header-actions {
     width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .map-header-actions .ghost-button {

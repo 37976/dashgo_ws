@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 
+import cv2
 import json
 import math
 import mimetypes
+import numpy as np
 import os
 import struct
 import threading
@@ -17,7 +19,9 @@ from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Image, LaserScan
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import Image, LaserScan, PointCloud2
+import sensor_msgs_py.point_cloud2 as pc2
 from std_msgs.msg import String
 
 
@@ -41,13 +45,16 @@ class WebControlNode(Node):
         self.declare_parameter("mode_topic", "/control_mode")
         self.declare_parameter("image_topic", "/camera/camera/color/image_raw")
         self.declare_parameter("scan_topic", "/scan_filtered")
+        self.declare_parameter("pointcloud_topic", "")
         self.declare_parameter("base_frame", "base_footprint")
         self.declare_parameter("linear_limit", 0.25)
         self.declare_parameter("angular_limit", 1.20)
         self.declare_parameter("cmd_vel_timeout", 0.6)
-        self.declare_parameter("map_publish_hz", 1.0)
-        self.declare_parameter("camera_publish_hz", 2.0)
-        self.declare_parameter("camera_max_width", 240)
+        self.declare_parameter("manual_cmd_publish_hz", 500.0)
+        self.declare_parameter("map_publish_hz", 2.0)
+        self.declare_parameter("camera_publish_hz", 12.0)
+        self.declare_parameter("camera_max_width", 320)
+        self.declare_parameter("camera_jpeg_quality", 70)
         self.declare_parameter("robot_radius", 0.20)
         self.declare_parameter("odom_online_timeout", 1.5)
         self.declare_parameter("scan_online_timeout", 1.5)
@@ -63,13 +70,16 @@ class WebControlNode(Node):
         self.mode_topic = str(self.get_parameter("mode_topic").value)
         self.image_topic = str(self.get_parameter("image_topic").value)
         self.scan_topic = str(self.get_parameter("scan_topic").value)
+        self.pointcloud_topic = str(self.get_parameter("pointcloud_topic").value)
         self.base_frame = str(self.get_parameter("base_frame").value)
         self.linear_limit = float(self.get_parameter("linear_limit").value)
         self.angular_limit = float(self.get_parameter("angular_limit").value)
         self.cmd_vel_timeout = float(self.get_parameter("cmd_vel_timeout").value)
+        self.manual_cmd_publish_hz = max(float(self.get_parameter("manual_cmd_publish_hz").value), 1.0)
         self.map_publish_interval = 1.0 / max(float(self.get_parameter("map_publish_hz").value), 0.2)
         self.camera_publish_interval = 1.0 / max(float(self.get_parameter("camera_publish_hz").value), 0.2)
         self.camera_max_width = max(64, int(self.get_parameter("camera_max_width").value))
+        self.camera_jpeg_quality = int(max(30, min(95, self.get_parameter("camera_jpeg_quality").value)))
         self.robot_radius = float(self.get_parameter("robot_radius").value)
         self.odom_online_timeout = float(self.get_parameter("odom_online_timeout").value)
         self.scan_online_timeout = float(self.get_parameter("scan_online_timeout").value)
@@ -80,6 +90,7 @@ class WebControlNode(Node):
         self.map_version = 0
         self.path_version = 0
         self.goal_version = 0
+        self.scan_version = 0
         self.map_snapshot = None
         self.path_snapshot = []
         self.odom_snapshot = None
@@ -87,12 +98,16 @@ class WebControlNode(Node):
         self.control_mode = "nav"
         self.last_cmd_time = 0.0
         self.last_cmd_active = False
+        self.manual_linear_cmd = 0.0
+        self.manual_angular_cmd = 0.0
         self.last_map_export_time = 0.0
         self.last_camera_export_time = 0.0
         self.last_odom_time = 0.0
         self.last_scan_time = 0.0
+        self.camera_version = 0
         self.camera_frame = None
         self.camera_meta = None
+        self.scan_meta = None
 
         self.cmd_pub = self.create_publisher(Twist, self.cmd_vel_topic, 10)
         self.goal_pub = self.create_publisher(PoseStamped, self.goal_topic, 10)
@@ -102,9 +117,16 @@ class WebControlNode(Node):
         self.create_subscription(Odometry, self.odom_topic, self.odom_callback, 20)
         self.create_subscription(Path, self.path_topic, self.path_callback, 10)
         self.create_subscription(Image, self.image_topic, self.image_callback, 10)
-        self.create_subscription(LaserScan, self.scan_topic, self.scan_callback, 10)
+        if self.scan_topic:
+            self.create_subscription(LaserScan, self.scan_topic, self.scan_callback, qos_profile_sensor_data)
+        if self.pointcloud_topic:
+            self.create_subscription(PointCloud2, self.pointcloud_topic, self.pointcloud_callback, qos_profile_sensor_data)
 
         self.watchdog_timer = self.create_timer(0.1, self.watchdog_callback)
+        self.manual_cmd_timer = self.create_timer(
+            1.0 / self.manual_cmd_publish_hz,
+            self.manual_cmd_loop_callback,
+        )
 
         self.http_server = self.build_http_server()
         self.http_thread = threading.Thread(target=self.http_server.serve_forever, daemon=True)
@@ -183,7 +205,7 @@ class WebControlNode(Node):
             return
 
         try:
-            frame_bytes, width, height = self.convert_image_to_png(msg)
+            frame_bytes, width, height = self.convert_image_to_jpeg(msg)
         except ValueError as exc:
             self.get_logger().debug(f"Skip image frame: {exc}")
             return
@@ -195,12 +217,85 @@ class WebControlNode(Node):
                 "height": height,
                 "encoding": msg.encoding,
             }
+            self.camera_version += 1
             self.last_camera_export_time = now
 
     def scan_callback(self, msg):
-        del msg
+        now = time.monotonic()
+        valid_ranges = []
+        front_values = []
+        points = []
+        total_count = len(msg.ranges)
+        step = max(1, total_count // 240)
+
+        for index, distance in enumerate(msg.ranges):
+            if not (math.isfinite(distance) and msg.range_min <= distance <= msg.range_max):
+                continue
+            distance = float(distance)
+            angle = msg.angle_min + index * msg.angle_increment
+            valid_ranges.append(distance)
+            if abs(angle) <= math.radians(12.0):
+                front_values.append(distance)
+            if index % step == 0:
+                points.append([
+                    distance * math.cos(angle),
+                    distance * math.sin(angle),
+                ])
+
+        scan_meta = {
+            "count": int(total_count),
+            "valid_count": int(len(valid_ranges)),
+            "nearest_range": min(valid_ranges) if valid_ranges else None,
+            "front_range": min(front_values) if front_values else None,
+            "range_min": float(msg.range_min),
+            "range_max": float(msg.range_max),
+            "points": points,
+        }
         with self.state_lock:
-            self.last_scan_time = time.monotonic()
+            self.last_scan_time = now
+            self.scan_meta = scan_meta
+            self.scan_version += 1
+
+    def pointcloud_callback(self, msg):
+        now = time.monotonic()
+        try:
+            raw_points = list(pc2.read_points(msg, field_names=("x", "y", "z"), skip_nans=True))
+        except Exception as exc:
+            self.get_logger().debug(f"Skip pointcloud frame: {exc}")
+            return
+
+        total_count = len(raw_points)
+        step = max(1, total_count // 240) if total_count else 1
+        planar_distances = []
+        front_values = []
+        points = []
+
+        for index, point in enumerate(raw_points):
+            x = float(point[0])
+            y = float(point[1])
+            distance = math.hypot(x, y)
+            if not math.isfinite(distance) or distance <= 1e-4:
+                continue
+            planar_distances.append(distance)
+            if abs(math.atan2(y, x)) <= math.radians(12.0):
+                front_values.append(distance)
+            if index % step == 0:
+                points.append([x, y])
+
+        display_range = max(8.0, max(planar_distances) if planar_distances else 0.0)
+        scan_meta = {
+            "count": int(total_count),
+            "valid_count": int(len(planar_distances)),
+            "nearest_range": min(planar_distances) if planar_distances else None,
+            "front_range": min(front_values) if front_values else None,
+            "range_min": 0.0,
+            "range_max": float(display_range),
+            "points": points,
+        }
+        with self.state_lock:
+            self.last_scan_time = now
+            self.scan_meta = scan_meta
+            self.scan_version += 1
 
     def watchdog_callback(self):
         if not self.last_cmd_active:
@@ -218,14 +313,41 @@ class WebControlNode(Node):
         msg.angular.z = max(-self.angular_limit, min(self.angular_limit, float(angular)))
         self.cmd_pub.publish(msg)
 
+    def set_manual_cmd(self, linear, angular):
+        with self.state_lock:
+            self.manual_linear_cmd = max(-self.linear_limit, min(self.linear_limit, float(linear)))
+            self.manual_angular_cmd = max(-self.angular_limit, min(self.angular_limit, float(angular)))
+            self.last_cmd_time = time.monotonic()
+            self.last_cmd_active = (
+                abs(self.manual_linear_cmd) > 1e-5 or
+                abs(self.manual_angular_cmd) > 1e-5
+            )
+
+        self.publish_cmd_vel(self.manual_linear_cmd, self.manual_angular_cmd)
+
+    def manual_cmd_loop_callback(self):
+        with self.state_lock:
+            if self.control_mode != "manual" or not self.last_cmd_active:
+                return
+            linear = self.manual_linear_cmd
+            angular = self.manual_angular_cmd
+        self.publish_cmd_vel(linear, angular)
+
     def is_manual_mode(self):
         with self.state_lock:
             return self.control_mode == "manual"
 
+    def is_paused_mode(self):
+        with self.state_lock:
+            return self.control_mode == "pause"
+
     def stop_robot(self):
+        with self.state_lock:
+            self.manual_linear_cmd = 0.0
+            self.manual_angular_cmd = 0.0
+            self.last_cmd_active = False
+            self.last_cmd_time = 0.0
         self.publish_cmd_vel(0.0, 0.0)
-        self.last_cmd_active = False
-        self.last_cmd_time = 0.0
 
     def publish_goal(self, x, y, yaw):
         self.set_control_mode("nav")
@@ -245,14 +367,14 @@ class WebControlNode(Node):
 
     def set_control_mode(self, mode):
         clean_mode = mode.strip().lower()
-        if clean_mode not in ("manual", "nav"):
+        if clean_mode not in ("manual", "nav", "pause"):
             raise ValueError(f"Unsupported control mode: {mode}")
 
         msg = String()
         msg.data = clean_mode
         self.mode_pub.publish(msg)
 
-        if clean_mode == "manual":
+        if clean_mode in ("manual", "pause"):
             self.stop_robot()
 
         with self.state_lock:
@@ -298,8 +420,20 @@ class WebControlNode(Node):
                     "mode": self.mode_topic,
                     "image": self.image_topic,
                     "scan": self.scan_topic,
+                    "pointcloud": self.pointcloud_topic,
                 },
                 "base_frame": self.base_frame,
+            }
+
+    def build_radar_payload(self):
+        with self.state_lock:
+            now = time.monotonic()
+            radar_online = (now - self.last_scan_time) <= self.scan_online_timeout
+            return {
+                "ok": self.scan_meta is not None,
+                "version": self.scan_version,
+                "online": radar_online,
+                "scan": self.scan_meta,
             }
 
     def build_map_payload(self):
@@ -325,13 +459,18 @@ class WebControlNode(Node):
             return {
                 "ok": self.camera_frame is not None,
                 "camera": self.camera_meta,
+                "version": self.camera_version,
             }
 
     def build_camera_frame_payload(self):
         with self.state_lock:
             return self.camera_frame
 
-    def convert_image_to_png(self, msg):
+    def build_camera_stream_frame(self):
+        with self.state_lock:
+            return self.camera_version, self.camera_frame
+
+    def convert_image_to_jpeg(self, msg):
         if msg.encoding not in ("rgb8", "bgr8", "rgba8", "bgra8", "mono8"):
             raise ValueError(f"Unsupported encoding: {msg.encoding}")
 
@@ -347,48 +486,34 @@ class WebControlNode(Node):
             raise ValueError("Empty image")
 
         step_x = max(1, math.ceil(msg.width / self.camera_max_width))
-        out_width = max(1, msg.width // step_x)
-        out_height = max(1, msg.height // step_x)
-        out_rgb = bytearray(out_width * out_height * 3)
-        data = msg.data
+        image = np.frombuffer(msg.data, dtype=np.uint8)
+        expected_min_size = msg.step * msg.height
+        if image.size < expected_min_size:
+            raise ValueError("Incomplete image buffer")
 
-        for out_y, src_y in enumerate(range(0, msg.height, step_x)):
-            if out_y >= out_height:
-                break
-            row_base = src_y * msg.step
-            for out_x, src_x in enumerate(range(0, msg.width, step_x)):
-                if out_x >= out_width:
-                    break
-                src_index = row_base + src_x * channels
-                dst_index = (out_y * out_width + out_x) * 3
+        image = image[:expected_min_size]
+        if channels == 1:
+            frame = image.reshape((msg.height, msg.step))[:, :msg.width]
+        else:
+            frame = image.reshape((msg.height, msg.step // channels, channels))[:, :msg.width, :]
 
-                if msg.encoding == "rgb8":
-                    r = data[src_index]
-                    g = data[src_index + 1]
-                    b = data[src_index + 2]
-                elif msg.encoding == "bgr8":
-                    b = data[src_index]
-                    g = data[src_index + 1]
-                    r = data[src_index + 2]
-                elif msg.encoding == "rgba8":
-                    r = data[src_index]
-                    g = data[src_index + 1]
-                    b = data[src_index + 2]
-                elif msg.encoding == "bgra8":
-                    b = data[src_index]
-                    g = data[src_index + 1]
-                    r = data[src_index + 2]
-                else:
-                    gray = data[src_index]
-                    r = gray
-                    g = gray
-                    b = gray
+        if step_x > 1:
+            frame = frame[::step_x, ::step_x]
 
-                out_rgb[dst_index] = r
-                out_rgb[dst_index + 1] = g
-                out_rgb[dst_index + 2] = b
+        if msg.encoding == "rgb8":
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        elif msg.encoding == "rgba8":
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+        elif msg.encoding == "bgra8":
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
 
-        return self.rgb_to_png_bytes(out_rgb, out_width, out_height), out_width, out_height
+        encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), self.camera_jpeg_quality]
+        ok, encoded = cv2.imencode(".jpg", frame, encode_params)
+        if not ok:
+            raise ValueError("JPEG encode failed")
+
+        height, width = frame.shape[:2]
+        return encoded.tobytes(), int(width), int(height)
 
     def png_chunk(self, chunk_type, data):
         crc = zlib.crc32(chunk_type)
@@ -444,13 +569,53 @@ class WebControlNode(Node):
             def log_message(self, format_string, *args):
                 node.get_logger().debug(format_string % args)
 
+            def write_response_body(self, data):
+                try:
+                    self.wfile.write(data)
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
+                    node.get_logger().debug("HTTP client disconnected before response completed")
+
+            def stream_mjpeg(self):
+                boundary = b"--frame\r\n"
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Pragma", "no-cache")
+                self.send_header("Connection", "close")
+                self.end_headers()
+
+                last_version = -1
+                try:
+                    while True:
+                        version, frame = node.build_camera_stream_frame()
+                        if frame is None:
+                            time.sleep(0.05)
+                            continue
+                        if version == last_version:
+                            time.sleep(0.02)
+                            continue
+
+                        header = (
+                            boundary +
+                            b"Content-Type: image/jpeg\r\n" +
+                            f"Content-Length: {len(frame)}\r\n\r\n".encode("ascii")
+                        )
+                        self.wfile.write(header)
+                        self.wfile.write(frame)
+                        self.wfile.write(b"\r\n")
+                        self.wfile.flush()
+                        last_version = version
+                except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
+                    node.get_logger().debug("MJPEG client disconnected")
+
             def send_json(self, payload, status=HTTPStatus.OK):
                 data = json.dumps(payload).encode("utf-8")
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
-                self.wfile.write(data)
+                self.write_response_body(data)
 
             def read_json_body(self):
                 content_length = int(self.headers.get("Content-Length", "0"))
@@ -466,6 +631,9 @@ class WebControlNode(Node):
                 if parsed.path == "/api/status":
                     self.send_json(node.build_status_payload())
                     return
+                if parsed.path == "/api/radar":
+                    self.send_json(node.build_radar_payload())
+                    return
                 if parsed.path == "/api/map":
                     self.send_json(node.build_map_payload())
                     return
@@ -475,7 +643,10 @@ class WebControlNode(Node):
                 if parsed.path == "/api/camera/meta":
                     self.send_json(node.build_camera_meta_payload())
                     return
-                if parsed.path in ("/api/camera/frame.bmp", "/api/camera/frame.png"):
+                if parsed.path == "/api/camera/stream.mjpg":
+                    self.stream_mjpeg()
+                    return
+                if parsed.path in ("/api/camera/frame.jpg", "/api/camera/frame.jpeg", "/api/camera/frame.bmp", "/api/camera/frame.png"):
                     frame = node.build_camera_frame_payload()
                     if frame is None:
                         self.send_json(
@@ -484,11 +655,11 @@ class WebControlNode(Node):
                         )
                         return
                     self.send_response(HTTPStatus.OK)
-                    self.send_header("Content-Type", "image/png")
+                    self.send_header("Content-Type", "image/jpeg")
                     self.send_header("Cache-Control", "no-store")
                     self.send_header("Content-Length", str(len(frame)))
                     self.end_headers()
-                    self.wfile.write(frame)
+                    self.write_response_body(frame)
                     return
 
                 rel_path = parsed.path
@@ -509,7 +680,7 @@ class WebControlNode(Node):
                 self.send_header("Expires", "0")
                 self.send_header("Content-Length", str(len(content)))
                 self.end_headers()
-                self.wfile.write(content)
+                self.write_response_body(content)
 
             def do_POST(self):
                 parsed = urlparse(self.path)
@@ -531,15 +702,20 @@ class WebControlNode(Node):
                         return
                     linear = float(payload.get("linear", 0.0))
                     angular = float(payload.get("angular", 0.0))
-                    node.publish_cmd_vel(linear, angular)
-                    node.last_cmd_time = time.monotonic()
-                    node.last_cmd_active = abs(linear) > 1e-5 or abs(angular) > 1e-5
+                    node.set_manual_cmd(linear, angular)
+                    self.send_json({"ok": True})
+                    return
+
+                if parsed.path == "/api/hold":
+                    node.stop_robot()
                     self.send_json({"ok": True})
                     return
 
                 if parsed.path == "/api/stop":
+                    next_mode = "nav" if node.is_paused_mode() else "pause"
+                    node.set_control_mode(next_mode)
                     node.stop_robot()
-                    self.send_json({"ok": True})
+                    self.send_json({"ok": True, "mode": next_mode})
                     return
 
                 if parsed.path == "/api/goal":
