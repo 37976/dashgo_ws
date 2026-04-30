@@ -132,6 +132,22 @@
     <origin xyz="0.0 0.0 0.52" rpy="0 0 0"/>
   </joint>
 
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="imu_link"/>
+    <origin xyz="0.0 0.0 0.30" rpy="0 0 0"/>
+  </joint>
+
+  <link name="imu_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.03 0.03 0.01"/>
+      </geometry>
+      <material name="orange"/>
+    </visual>
+  </link>
+
   <link name="laser">
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>

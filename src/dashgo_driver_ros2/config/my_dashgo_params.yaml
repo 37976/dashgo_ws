@@ -11,7 +11,15 @@ dashgo_driver:
     publish_odom_tf: true
 
     useSonar: false
-    useImu: false
+    useImu: true
+    imu_command: angle
+    imu_angle_topic: imu_angle
+    imu_raw_topic: imu_angles_raw
+    imu_topic: imu/data
+    imu_frame: imu_link
+    imu_yaw_covariance: 0.05
+    imu_yaw_scale: 1.0
+    use_imu_heading_in_odom: false
     use_base_controller: true
     base_controller_rate: 10.0
     base_controller_timeout: 1.0

@@ -10,9 +10,10 @@ from nav_msgs.msg import Odometry
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.duration import Duration
 from rclpy.node import Node
+from sensor_msgs.msg import Imu
 from serial import Serial
 from serial.serialutil import SerialException
-from std_msgs.msg import Int16
+from std_msgs.msg import Float32, Int16, Int16MultiArray
 from tf2_ros import TransformBroadcaster
 
 
@@ -48,6 +49,32 @@ ODOM_TWIST_COVARIANCE2 = [
     0.0, 0.0, 0.0, 0.0, 1e6, 0.0,
     0.0, 0.0, 0.0, 0.0, 0.0, 1e-9,
 ]
+IMU_ANGULAR_VELOCITY_COVARIANCE_UNKNOWN = [
+    -1.0, 0.0, 0.0,
+    0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0,
+]
+IMU_LINEAR_ACCELERATION_COVARIANCE_UNKNOWN = [
+    -1.0, 0.0, 0.0,
+    0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0,
+]
+
+
+def normalize_angle_radians(angle):
+    while angle > math.pi:
+        angle -= 2.0 * math.pi
+    while angle < -math.pi:
+        angle += 2.0 * math.pi
+    return angle
+
+
+def normalize_angle_degrees(angle):
+    while angle > 180.0:
+        angle -= 360.0
+    while angle < -180.0:
+        angle += 360.0
+    return angle
 
 
 class Arduino:
@@ -180,6 +207,22 @@ class Arduino:
                 attempts += 1
             raise SerialException(f"Failed to execute ack command: {command}")
 
+    def execute_raw(self, command, timeout=None):
+        with self.mutex:
+            self._flush_input()
+            attempts = 0
+            recv_timeout = self.timeout if timeout is None else timeout
+            while attempts < 2:
+                try:
+                    self._write_line(command)
+                    value = self.recv(recv_timeout)
+                    if value not in ("", None):
+                        return value
+                except Exception:
+                    pass
+                attempts += 1
+            raise SerialException(f"Failed to execute raw command: {command}")
+
     def update_pid(self, kp, kd, ki, ko):
         command = f"u {kp}:{kd}:{ki}:{ko}"
         self.execute_ack(command)
@@ -214,6 +257,14 @@ class Arduino:
             raise SerialException("PID output reply did not contain 2 values")
         return values
 
+    def get_imu_angles(self, command="angle"):
+        values = self.execute_array(command)
+        if len(values) != 2:
+            raise SerialException(
+                f"IMU angle reply did not contain 2 values for command: {command}"
+            )
+        return values
+
 
 class BaseController:
     def __init__(self, node, arduino, base_frame):
@@ -225,6 +276,17 @@ class BaseController:
         self.odom_topic = node.get_parameter("odom_topic").value
         self.publish_odom_tf = bool(node.get_parameter("publish_odom_tf").value)
         self.motors_reversed = bool(node.get_parameter("motors_reversed").value)
+        self.use_imu = bool(node.get_parameter("useImu").value)
+        self.imu_command = str(node.get_parameter("imu_command").value)
+        self.imu_angle_topic = str(node.get_parameter("imu_angle_topic").value)
+        self.imu_raw_topic = str(node.get_parameter("imu_raw_topic").value)
+        self.imu_topic = str(node.get_parameter("imu_topic").value)
+        self.imu_frame = str(node.get_parameter("imu_frame").value) or self.base_frame
+        self.imu_yaw_covariance = float(node.get_parameter("imu_yaw_covariance").value)
+        self.imu_yaw_scale = float(node.get_parameter("imu_yaw_scale").value)
+        self.use_imu_heading_in_odom = bool(
+            node.get_parameter("use_imu_heading_in_odom").value
+        )
 
         self.rate = float(node.get_parameter("base_controller_rate").value)
         self.timeout = float(node.get_parameter("base_controller_timeout").value)
@@ -275,6 +337,14 @@ class BaseController:
         self.v_des_left = 0.0
         self.v_des_right = 0.0
         self.last_cmd_vel = now
+        self.latest_imu_yaw = None
+        self.latest_imu_yaw_wrapped = None
+        self.latest_imu_primary = None
+        self.latest_imu_stamp = None
+        self.imu_heading_offset = 0.0
+        self.imu_heading_initialized = False
+        self.imu_yaw_delta = 0.0
+        self.imu_angular_velocity_z = 0.0
 
         self.cmd_vel_sub = node.create_subscription(
             Twist, self.cmd_vel_topic, self.cmd_vel_callback, 10
@@ -287,12 +357,32 @@ class BaseController:
         self.right_pidout_pub = node.create_publisher(Int16, "Rpidout", 10)
         self.left_vel_pub = node.create_publisher(Int16, "Lvel", 10)
         self.right_vel_pub = node.create_publisher(Int16, "Rvel", 10)
+        self.imu_angle_pub = None
+        self.imu_raw_pub = None
+        self.imu_pub = None
+        if self.use_imu:
+            self.imu_angle_pub = node.create_publisher(Float32, self.imu_angle_topic, 10)
+            self.imu_raw_pub = node.create_publisher(Int16MultiArray, self.imu_raw_topic, 10)
+            self.imu_pub = node.create_publisher(Imu, self.imu_topic, 10)
 
         self.arduino.reset_encoders()
         self.node.get_logger().info(
             f"Started base controller for base width {self.wheel_track} m "
             f"with {self.encoder_resolution} ticks per rev"
         )
+        if self.use_imu:
+            self.node.get_logger().info(
+                f"IMU angle polling enabled via '{self.imu_command}' "
+                f"(yaw topic: {self.imu_angle_topic}, raw topic: {self.imu_raw_topic}, "
+                f"imu topic: {self.imu_topic}, frame: {self.imu_frame})"
+            )
+            self.node.get_logger().info(
+                f"IMU yaw calibration scale: {self.imu_yaw_scale:.4f}"
+            )
+            if self.use_imu_heading_in_odom:
+                self.node.get_logger().info(
+                    "Using IMU yaw to override /odom heading for navigation."
+                )
 
     def poll(self):
         now = self.node.get_clock().now()
@@ -315,6 +405,9 @@ class BaseController:
                 f"Encoder/PID polling failed ({self.bad_encoder_count}): {exc}"
             )
             return
+
+        if self.use_imu:
+            self._poll_imu()
 
         dt = (now - self.then).nanoseconds / 1e9
         if dt <= 0.0:
@@ -350,14 +443,22 @@ class BaseController:
         dth = (dright - dleft) / self.wheel_track
         vxy = dxy_ave / dt
         vth = dth / dt
+        heading_for_integration = self.th
 
         if dxy_ave != 0.0:
             dx = math.cos(dth) * dxy_ave
             dy = -math.sin(dth) * dxy_ave
-            self.x += math.cos(self.th) * dx - math.sin(self.th) * dy
-            self.y += math.sin(self.th) * dx + math.cos(self.th) * dy
+            self.x += math.cos(heading_for_integration) * dx - math.sin(heading_for_integration) * dy
+            self.y += math.sin(heading_for_integration) * dx + math.cos(heading_for_integration) * dy
 
-        if dth != 0.0:
+        if (
+            self.use_imu and
+            self.use_imu_heading_in_odom and
+            self.latest_imu_yaw is not None
+        ):
+            self.th += self.imu_yaw_delta
+            vth = self.imu_angular_velocity_z
+        elif dth != 0.0:
             self.th += dth
 
         quaternion = Quaternion()
@@ -416,6 +517,75 @@ class BaseController:
             self.arduino.drive(drive_left, drive_right)
 
         self.t_next = now + self.t_delta
+
+    def _poll_imu(self):
+        try:
+            primary_angle, yaw_angle = self.arduino.get_imu_angles(self.imu_command)
+        except Exception as exc:
+            self.node.get_logger().warn(
+                f"IMU polling failed via '{self.imu_command}': {exc}",
+                throttle_duration_sec=5.0,
+            )
+            return
+
+        if self.imu_raw_pub is not None:
+            self.imu_raw_pub.publish(
+                Int16MultiArray(data=[int(primary_angle), int(yaw_angle)])
+            )
+
+        now = self.node.get_clock().now()
+        calibrated_yaw_degrees = normalize_angle_degrees(
+            float(yaw_angle) * self.imu_yaw_scale
+        )
+        wrapped_yaw_radians = normalize_angle_radians(
+            math.radians(calibrated_yaw_degrees)
+        )
+        if (
+            self.latest_imu_yaw is None or
+            self.latest_imu_yaw_wrapped is None or
+            self.latest_imu_stamp is None
+        ):
+            yaw_radians = wrapped_yaw_radians
+            yaw_delta = 0.0
+        else:
+            yaw_delta = normalize_angle_radians(
+                wrapped_yaw_radians - self.latest_imu_yaw_wrapped
+            )
+            yaw_radians = self.latest_imu_yaw + yaw_delta
+
+        if self.latest_imu_yaw is not None and self.latest_imu_stamp is not None:
+            imu_dt = (now - self.latest_imu_stamp).nanoseconds / 1e9
+            if imu_dt > 0.0:
+                self.imu_angular_velocity_z = yaw_delta / imu_dt
+        self.imu_yaw_delta = yaw_delta
+        self.latest_imu_primary = int(primary_angle)
+        self.latest_imu_yaw = yaw_radians
+        self.latest_imu_yaw_wrapped = wrapped_yaw_radians
+        self.latest_imu_stamp = now
+
+        if self.imu_angle_pub is not None:
+            self.imu_angle_pub.publish(Float32(data=float(calibrated_yaw_degrees)))
+
+        if self.imu_pub is not None:
+            quaternion = Quaternion()
+            quaternion.x = 0.0
+            quaternion.y = 0.0
+            quaternion.z = math.sin(yaw_radians / 2.0)
+            quaternion.w = math.cos(yaw_radians / 2.0)
+
+            imu_msg = Imu()
+            imu_msg.header.stamp = self.node.get_clock().now().to_msg()
+            imu_msg.header.frame_id = self.imu_frame
+            imu_msg.orientation = quaternion
+            imu_msg.orientation_covariance = [
+                1e6, 0.0, 0.0,
+                0.0, 1e6, 0.0,
+                0.0, 0.0, self.imu_yaw_covariance,
+            ]
+            imu_msg.angular_velocity.z = float(self.imu_angular_velocity_z)
+            imu_msg.angular_velocity_covariance = IMU_ANGULAR_VELOCITY_COVARIANCE_UNKNOWN
+            imu_msg.linear_acceleration_covariance = IMU_LINEAR_ACCELERATION_COVARIANCE_UNKNOWN
+            self.imu_pub.publish(imu_msg)
 
     def _ramp_velocity(self, current, target):
         if current < target:
@@ -505,6 +675,14 @@ class DashgoDriverNode(Node):
             ("publish_odom_tf", True),
             ("useSonar", False),
             ("useImu", False),
+            ("imu_command", "angle"),
+            ("imu_angle_topic", "imu_angle"),
+            ("imu_raw_topic", "imu_angles_raw"),
+            ("imu_topic", "imu/data"),
+            ("imu_frame", ""),
+            ("imu_yaw_covariance", 0.05),
+            ("imu_yaw_scale", 1.0),
+            ("use_imu_heading_in_odom", True),
             ("use_base_controller", True),
             ("base_controller_rate", 10.0),
             ("base_controller_timeout", 1.0),

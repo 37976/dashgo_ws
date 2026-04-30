@@ -195,6 +195,9 @@ ros2 topic list
 ros2 topic echo /scan --once
 ros2 topic echo /odom --once
 ros2 topic echo /cmd_vel --once
+ros2 topic echo /imu_angle --once
+ros2 topic echo /imu_angles_raw --once
+ros2 topic echo /imu/data --once
 ros2 topic echo /points_raw --once
 ros2 topic echo /combined_grid --once
 ros2 topic echo /path --once
@@ -208,6 +211,8 @@ ros2 topic echo /control_mode --once
 - 雷达发布 `/scan`
 - `scan_to_points_node` 将 `/scan` 转成 `/points_raw`
 - `nav_slam` 使用 `/points_raw`、`/odom`、静态地图进行处理
+- `dashgo_driver_ros2` 额外发布底盘 IMU 角度 `/imu_angle`、原始双值 `/imu_angles_raw`，以及标准 IMU `/imu/data`
+- 默认会把 IMU 的航向角融合进 `/odom` 的朝向，导航链路直接通过现有 `/odom` 受益
 - `start_nav` 发布 `/cmd_vel`
 - `dashgo_driver_ros2` 接收 `/cmd_vel` 控制底盘
 - `dashgo_web_control` 通过网页提供模式切换、手动遥控和目标下发

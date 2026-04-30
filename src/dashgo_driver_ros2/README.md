@@ -8,6 +8,9 @@ ROS 2 Humble base driver package for the Dashgo mobile base.
 - `cmd_vel` subscription
 - Wheel PID polling and motor command output
 - `odom` publication
+- IMU angle polling from the Dashgo controller
+- Standard `sensor_msgs/Imu` publication on `/imu/data`
+- Optional fusion of IMU yaw into `/odom` heading for navigation
 - Optional `odom -> base_frame` TF publication
 - Sonar static TF launch entries for compatibility with the original ROS 1 package
 
@@ -55,6 +58,15 @@ ros2 run dashgo_driver_ros2 dashgo_driver_node --ros-args --params-file src/dash
 - `odom_frame`
 - `base_frame`
 - `publish_odom_tf`
+- `useImu`
+- `imu_command`
+- `imu_angle_topic`
+- `imu_raw_topic`
+- `imu_topic`
+- `imu_frame`
+- `imu_yaw_covariance`
+- `imu_yaw_scale`
+- `use_imu_heading_in_odom`
 - `wheel_diameter`
 - `wheel_track`
 - `encoder_resolution`
@@ -63,4 +75,4 @@ ros2 run dashgo_driver_ros2 dashgo_driver_node --ros-args --params-file src/dash
 
 ## Current scope
 
-This package currently focuses on the mobile base controller. Sonar and IMU data transport are not implemented yet even though compatibility parameters are kept in the config file.
+This package focuses on the mobile base controller, wheel odometry, and the Dashgo IMU angle interface exposed by the controller firmware. Sonar range transport is still not implemented.
