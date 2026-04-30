@@ -24,9 +24,17 @@ def resolve_qr_popup_script():
             "show_web_qr_popup.py",
         )
     )
-    if not matches:
-        raise FileNotFoundError("Unable to locate show_web_qr_popup.py")
-    return matches[0]
+    source_path = os.path.expanduser(
+        "~/project/dashgo_ws/src/dashgo_web_control/dashgo_web_control/show_web_qr_popup.py"
+    )
+    
+    if matches:
+        return matches[0]
+
+    if os.path.exists(source_path):
+        return source_path
+
+    raise FileNotFoundError("Unable to locate show_web_qr_popup.py")
 
 
 def resolve_hotspot_script():
@@ -42,9 +50,17 @@ def resolve_hotspot_script():
             "hotspot_manager.py",
         )
     )
-    if not matches:
-        raise FileNotFoundError("Unable to locate hotspot_manager.py")
-    return matches[0]
+    source_path = os.path.expanduser(
+        "~/project/dashgo_ws/src/dashgo_web_control/dashgo_web_control/hotspot_manager.py"
+    )
+
+    if matches:
+        return matches[0]
+
+    if os.path.exists(source_path):
+        return source_path
+
+    raise FileNotFoundError("Unable to locate hotspot_manager.py")
 
 
 def generate_launch_description():

@@ -5,7 +5,6 @@
 #include <mutex>
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
-#include "geometry_msgs/msg/twist.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "nav_msgs/msg/path.hpp"
@@ -30,7 +29,21 @@ private:
     const nav_msgs::msg::Odometry::SharedPtr & odom_local,
     const geometry_msgs::msg::PoseStamped & goal_local);
   void planTimerCallback();
-  void publishStopCmd();
+  int classifyMapCell(int8_t value) const;
+  bool isSignificantMapChange(
+    const nav_msgs::msg::OccupancyGrid & previous,
+    const nav_msgs::msg::OccupancyGrid & current,
+    int * changed_cells) const;
+  bool isPathBlockedByMap(
+    const nav_msgs::msg::Path & path,
+    const nav_msgs::msg::Odometry & odom,
+    const nav_msgs::msg::OccupancyGrid & map,
+    double check_distance_m,
+    int * blocked_path_index) const;
+  double pathLengthFromClosestPose(
+    const nav_msgs::msg::Path & path,
+    const geometry_msgs::msg::Pose & pose) const;
+  double pathLength(const nav_msgs::msg::Path & path) const;
 
   std::mutex data_mutex_;
 
@@ -45,12 +58,26 @@ private:
   bool goal_reached_ {false};
 
   double robot_radius_ {0.20};
+  double clearance_margin_ {0.01};
   int occ_threshold_ {50};
   bool unknown_is_obstacle_ {true};
   bool publish_debug_path2_ {true};
   double goal_tolerance_ {0.2};
   double trunk_safety_penalty_scale_ {0.06};
-  double direct_connect_distance_ {0.60};
+  int connector_candidate_count_ {0};
+  bool enable_local_map_cropping_ {true};
+  double local_crop_min_padding_m_ {2.0};
+  double local_crop_detour_ratio_ {0.5};
+  double local_crop_max_padding_m_ {8.0};
+  double local_crop_expansion_factor_ {1.8};
+  int local_crop_max_expansions_ {2};
+  bool enable_local_map_downsampling_ {false};
+  int local_map_downsample_factor_ {2};
+  int path_smoothing_control_step_ {2};
+  double stable_map_replan_period_ms_ {3000.0};
+  int map_significant_change_cells_ {50};
+  double path_obstacle_check_distance_m_ {2.0};
+  double path_switch_min_improvement_m_ {0.5};
 
   rclcpp::TimerBase::SharedPtr plan_timer_;
 
@@ -61,6 +88,10 @@ private:
   double last_plan_x_ {0.0};
   double last_plan_y_ {0.0};
   bool has_last_plan_pose_ {false};
+  rclcpp::Time last_map_replan_request_time_ {0, 0, RCL_ROS_TIME};
+  bool has_last_map_replan_request_ {false};
+  nav_msgs::msg::Path last_published_plan_;
+  bool has_published_plan_ {false};
 
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_sub_;
@@ -68,7 +99,6 @@ private:
 
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path2_pub_;
-  rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr skeleton_pub_;
 
   std::unique_ptr<VoronoiGridPlanner> planner_;
