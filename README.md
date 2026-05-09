@@ -137,6 +137,38 @@ ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py
 
 以下命令默认沿用上面的“常用环境命令”环境。
 
+### XFeat 导航与调试
+
+当前 Dashgo 这边可直接使用的 XFeat 相关命令：
+
+```bash
+# Dashgo 真机导航 + XFeat 辅助修正
+ros2 launch dashgo_xfeat_bringup dashgo_nav_xfeat_odometry.launch.py
+
+# 只起 D435 + XFeat 原生 RGB-D 里程计
+ros2 launch dashgo_xfeat_bringup real_d435_only_xfeat_odometry.launch.py
+```
+
+说明：
+
+- `dashgo_nav_xfeat_odometry.launch.py`
+  - 底盘 `/odom` 仍然是主里程计
+  - `XFeat` 输出 `/xfeat/delta_odom`
+  - `odom_fusion_node` 输出 `/localized_odom`
+  - 终端状态会打印：
+    - `base_only`
+    - `fused`
+    - `rejected`
+- `real_d435_only_xfeat_odometry.launch.py`
+  - 只用于单独验证 D435 + XFeat 原生视觉里程计
+  - 不带整机导航链路
+
+如果要看融合调试表格，默认位置是：
+
+```bash
+/home/xu/xfeat_pose/odom_fusion_debug.csv
+```
+
 ### 底盘单独启动
 
 ```bash

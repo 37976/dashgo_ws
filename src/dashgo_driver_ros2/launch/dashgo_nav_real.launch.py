@@ -101,6 +101,8 @@ def generate_launch_description():
     hotspot_ssid = LaunchConfiguration("hotspot_ssid")
     hotspot_password = LaunchConfiguration("hotspot_password")
     hotspot_ifname = LaunchConfiguration("hotspot_ifname")
+    map_odom_topic = LaunchConfiguration("map_odom_topic")
+    control_odom_topic = LaunchConfiguration("control_odom_topic")
 
     return LaunchDescription(
         [
@@ -133,6 +135,8 @@ def generate_launch_description():
             DeclareLaunchArgument("hotspot_ssid", default_value="Dashgo-Robot"),
             DeclareLaunchArgument("hotspot_password", default_value="dashgo12345"),
             DeclareLaunchArgument("hotspot_ifname", default_value=""),
+            DeclareLaunchArgument("map_odom_topic", default_value="/odom"),
+            DeclareLaunchArgument("control_odom_topic", default_value="/odom"),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(robot_launch),
                 condition=IfCondition(start_robot),
@@ -220,6 +224,7 @@ def generate_launch_description():
                         "obstacle_radius": 0.08,
                         "clear_radius": 0.20,
                         "projection_gap_fill_cells": 1,
+                        "odom_topic": map_odom_topic,
                     }
                 ],
             ),
@@ -236,7 +241,7 @@ def generate_launch_description():
                 name="points_pub_map",
                 condition=IfCondition(start_nav),
                 output="screen",
-                parameters=[{"frame_id": "map"}],
+                parameters=[{"frame_id": "map"}, {"odom_topic": map_odom_topic}],
             ),
             Node(
                 package="nav_slam",
@@ -244,6 +249,7 @@ def generate_launch_description():
                 name="start_nav",
                 condition=IfCondition(start_nav),
                 output="screen",
+                parameters=[{"odom_topic": control_odom_topic}],
             ),
             Node(
                 package="rviz2",

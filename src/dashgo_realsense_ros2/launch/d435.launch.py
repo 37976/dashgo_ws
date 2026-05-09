@@ -15,6 +15,7 @@ def generate_launch_description():
     use_rviz = LaunchConfiguration("use_rviz")
     color_profile = LaunchConfiguration("color_profile")
     depth_profile = LaunchConfiguration("depth_profile")
+    align_depth = LaunchConfiguration("align_depth")
 
     try:
         rs_launch = get_package_share_directory("realsense2_camera") + "/launch/rs_launch.py"
@@ -53,6 +54,7 @@ def generate_launch_description():
             DeclareLaunchArgument("use_rviz", default_value="false"),
             DeclareLaunchArgument("color_profile", default_value="640,480,30"),
             DeclareLaunchArgument("depth_profile", default_value="640,480,30"),
+            DeclareLaunchArgument("align_depth", default_value="true"),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(rs_launch),
                 launch_arguments={
@@ -68,7 +70,7 @@ def generate_launch_description():
                     "rgb_camera.color_profile": color_profile,
                     "depth_module.depth_profile": depth_profile,
                     "enable_pointcloud": "false",
-                    "align_depth": "false",
+                    "align_depth.enable": align_depth,
                     "initial_reset": "true",
                     "publish_tf": "true",
                     "publish_odom_tf": "false",

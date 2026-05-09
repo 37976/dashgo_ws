@@ -29,9 +29,12 @@ class PointCloudTransformNode(Node):
         
         # Declare parameters
         self.declare_parameter('frame_id', 'map')
+        self.declare_parameter('odom_topic', '/odom')
         
         # Create subscribers
-        self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
+        self.odom_sub = self.create_subscription(
+            Odometry, self.get_parameter('odom_topic').value, self.odom_callback, 10
+        )
         self.pointcloud_sub = self.create_subscription(PointCloud2, '/points_raw', self.pointcloud_callback, 10)
         
         # Create publisher
@@ -113,6 +116,5 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-
 
 

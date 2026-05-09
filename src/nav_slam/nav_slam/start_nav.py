@@ -65,8 +65,10 @@ class PathFollowingNode(Node):
         self.linear_acc_limit = 0.03  # 每次回调线速度最大变化量
         self.angular_acc_limit = 0.08 # 每次回调角速度最大变化量
 
+        self.declare_parameter('odom_topic', '/odom')
+        odom_topic = self.get_parameter('odom_topic').value
         self.odom_subscriber = self.create_subscription(
-            Odometry, '/odom', self.odometry_callback, 10
+            Odometry, odom_topic, self.odometry_callback, 10
         )
         self.cmd_vel_publisher = self.create_publisher(Twist, '/cmd_vel', 10)
         self.path_subscriber = self.create_subscription(
