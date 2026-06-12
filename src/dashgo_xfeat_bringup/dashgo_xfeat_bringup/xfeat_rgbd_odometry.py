@@ -3,7 +3,6 @@
 import csv
 import math
 import os
-import sys
 from typing import Optional
 
 import cv2
@@ -21,26 +20,7 @@ from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import String
 from tf2_ros import Buffer, TransformBroadcaster, TransformException, TransformListener
 
-
-def _resolve_xfeat_repo_dir(configured_dir: str) -> str:
-    candidates = []
-    if configured_dir:
-        candidates.append(configured_dir)
-
-    workspace_candidate = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "XFeat")
-    )
-    candidates.append(workspace_candidate)
-    candidates.append("/home/xu/project/XFeat")
-
-    for candidate in candidates:
-        if os.path.isfile(os.path.join(candidate, "modules", "xfeat.py")):
-            return candidate
-
-    raise FileNotFoundError(
-        "Cannot locate XFeat repo. Set parameter 'xfeat_repo_dir' to the directory containing "
-        "'modules/xfeat.py'."
-    )
+from .xfeat_mod.xfeat import XFeat
 
 
 def _frame_to_tensor(frame_bgr: np.ndarray) -> torch.Tensor:
@@ -130,18 +110,17 @@ class XFeatRgbdOdometry(Node):
         self.declare_parameter("rgb_topic", "/camera/camera/color/image_raw")
         self.declare_parameter("depth_topic", "/camera/camera/aligned_depth_to_color/image_raw")
         self.declare_parameter("camera_info_topic", "/camera/camera/color/camera_info")
-        self.declare_parameter("xfeat_repo_dir", "")
         self.declare_parameter("xfeat_weights_path", "")
         self.declare_parameter("top_k", 256)
         self.declare_parameter("detection_threshold", 0.05)
-        self.declare_parameter("min_score", 0.08)
+        self.declare_parameter("min_score", 0.0)
         self.declare_parameter("depth_scale", 0.001)
         self.declare_parameter("min_depth_m", 0.2)
         self.declare_parameter("max_depth_m", 3.0)
-        self.declare_parameter("match_min_cossim", 0.82)
-        self.declare_parameter("min_pnp_points", 12)
-        self.declare_parameter("min_inliers", 10)
-        self.declare_parameter("pnp_reproj_error", 4.0)
+        self.declare_parameter("match_min_cossim", 0.65)
+        self.declare_parameter("min_pnp_points", 6)
+        self.declare_parameter("min_inliers", 4)
+        self.declare_parameter("pnp_reproj_error", 8.0)
         self.declare_parameter("pnp_iterations", 200)
         self.declare_parameter("sync_queue_size", 10)
         self.declare_parameter("odom_topic", "/xfeat/odom")
@@ -199,15 +178,20 @@ class XFeatRgbdOdometry(Node):
             "dyaw_deg": 0.0,
         }
 
-        configured_repo_dir = str(self.get_parameter("xfeat_repo_dir").value)
-        self._xfeat_repo_dir = _resolve_xfeat_repo_dir(configured_repo_dir)
-        if self._xfeat_repo_dir not in sys.path:
-            sys.path.insert(0, self._xfeat_repo_dir)
-
-        from modules.xfeat import XFeat  # pylint: disable=import-outside-toplevel
-
         configured_weights_path = str(self.get_parameter("xfeat_weights_path").value)
-        weights_path = configured_weights_path or os.path.join(self._xfeat_repo_dir, "weights", "xfeat.pt")
+        if configured_weights_path and os.path.isfile(configured_weights_path):
+            weights_path = configured_weights_path
+        else:
+            # 默认使用包内自带的权重文件（由 package_data 确保安装到 Python 包目录）
+            weights_path = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "xfeat_mod", "weights", "xfeat.pt")
+            )
+        if configured_weights_path and configured_weights_path != weights_path:
+            self.get_logger().warn(
+                f"Configured weights not found: {configured_weights_path}, "
+                f"using bundled weights: {weights_path}"
+            )
+
         self._xfeat = XFeat(
             weights=weights_path,
             top_k=self._top_k,
@@ -236,7 +220,6 @@ class XFeatRgbdOdometry(Node):
         )
         self._sync.registerCallback(self._rgbd_callback)
 
-        self.get_logger().info(f"XFeat repo: {self._xfeat_repo_dir}")
         self.get_logger().info(f"XFeat weights: {weights_path}")
         self.get_logger().info("Running original XFeat RGB-D odometry logic: feature extraction, matching, depth back-projection and PnP.")
         self.get_logger().info(

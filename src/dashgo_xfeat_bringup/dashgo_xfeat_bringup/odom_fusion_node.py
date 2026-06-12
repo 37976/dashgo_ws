@@ -47,7 +47,7 @@ class OdomFusionNode(Node):
         self.declare_parameter("log_period_sec", 0.5)
         self.declare_parameter("max_delta_translation_diff_m", 0.20)
         self.declare_parameter("max_delta_yaw_diff_deg", 20.0)
-        self.declare_parameter("csv_log_path", "/home/xu/xfeat_pose/odom_fusion_debug.csv")
+        self.declare_parameter("csv_log_path", "/home/xu/xfeat_pose/real_odom_fusion_debug.csv")
         self.declare_parameter("path_topic", "/path")
         self.declare_parameter("control_mode_topic", "/control_mode")
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")

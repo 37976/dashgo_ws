@@ -22,10 +22,12 @@ src/
 ├── dashgo_lidar_ros2         # 雷达封装
 ├── dashgo_realsense_ros2     # RealSense 封装
 ├── dashgo_web_control        # 手机网页控制面板
+├── dashgo_xfeat_bringup      # XFeat 视觉里程计与融合
 ├── sllidar_ros2              # 雷达底层驱动
-├── nav_slam                  # 本地化导航节点
+├── nav_slam                  # 本地化导航节点（含全局定位 + 增强 Pure Pursuit）
 ├── nav2_voronoi_planner      # Voronoi 规划器
-└── dynamicvoronoi            # Voronoi 基础库
+├── dynamicvoronoi            # Voronoi 基础库
+└── kidnapped_robot_finder    # ORB 特征匹配全局定位库
 ```
 
 ## 环境要求
@@ -102,12 +104,14 @@ export ROS_LOG_DIR=/tmp/roslogs
 
 ### 推荐命令
 
+完整导航（全局定位 + XFeat + 增强 Pure Pursuit + 网页控制）：
+
 ```bash
 cd ~/dashgo_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 export ROS_LOG_DIR=/tmp/roslogs
-ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py start_hotspot:=true
+ros2 launch dashgo_xfeat_bringup dashgo_nav_xfeat_odometry.launch.py
 ```
 
 这条命令会同时启动：
@@ -115,22 +119,38 @@ ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py start_hotspot:=true
 - 底盘
 - 雷达
 - D435 相机
-- 导航节点
+- XFeat 视觉里程计
+- Odom 融合节点
+- 全局定位（ORB 匹配 PGM 静态地图 → 锁定 map→odom TF）
+- Voronoi 骨架规划器
+- 代价地图（静态地图 + 实时激光障碍物叠加）
+- 增强 Pure Pursuit 路径跟踪
 - 网页控制
-- 机器人固定热点
-- 二维码弹窗
+- RViz
+
+如果只需要基础导航（无 XFeat 视觉修正、无全局定位，回退到纯 SLAM 模式）：
+
+```bash
+ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py start_hotspot:=true use_static_map:=false
+```
 
 ### 常用变体
 
 ```bash
+# 不使用静态地图（纯 SLAM 模式，机器人从原点出发）
+ros2 launch dashgo_xfeat_bringup dashgo_nav_xfeat_odometry.launch.py use_static_map:=false
+
 # 不启动相机
-ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py start_hotspot:=true start_d435:=false
+ros2 launch dashgo_xfeat_bringup dashgo_nav_xfeat_odometry.launch.py start_d435:=false
+
 # 不启动 RViz
-ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py start_hotspot:=true start_nav_rviz:=false
-# 不启动相机，也不启动 RViz
-ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py start_hotspot:=true start_d435:=false start_nav_rviz:=false
-# 这次不想开机器人热点
-ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py
+ros2 launch dashgo_xfeat_bringup dashgo_nav_xfeat_odometry.launch.py start_nav_rviz:=false
+
+# 使用自定义地图
+ros2 launch dashgo_xfeat_bringup dashgo_nav_xfeat_odometry.launch.py nav_map_yaml:=/path/to/map.yaml
+
+# 基础导航模式（无 XFeat，底盘直驱）
+ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py start_hotspot:=true use_static_map:=false
 ```
 
 ## 其他启动方式
@@ -142,31 +162,37 @@ ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py
 当前 Dashgo 这边可直接使用的 XFeat 相关命令：
 
 ```bash
-# Dashgo 真机导航 + XFeat 辅助修正
+# Dashgo 真机完整导航（含全局定位 + XFeat 视觉修正 + 增强 Pure Pursuit）
 ros2 launch dashgo_xfeat_bringup dashgo_nav_xfeat_odometry.launch.py
 
 # 只起 D435 + XFeat 原生 RGB-D 里程计
 ros2 launch dashgo_xfeat_bringup real_d435_only_xfeat_odometry.launch.py
 ```
 
-说明：
+完整导航架构说明：
 
-- `dashgo_nav_xfeat_odometry.launch.py`
-  - 底盘 `/odom` 仍然是主里程计
-  - `XFeat` 输出 `/xfeat/delta_odom`
-  - `odom_fusion_node` 输出 `/localized_odom`
-  - 终端状态会打印：
-    - `base_only`
-    - `fused`
-    - `rejected`
-- `real_d435_only_xfeat_odometry.launch.py`
-  - 只用于单独验证 D435 + XFeat 原生视觉里程计
-  - 不带整机导航链路
+- **全局定位**：启动时 `lidar_global_localize` 用 ORB 特征匹配将 `/scan` 与 PGM 静态地图对齐，锁定 `map→odom` TF
+- **里程融合**：底盘 `/odom` 为主，`XFeat` 增量（`/xfeat/delta_odom`）做轻量修正
+- **里程分离**：建图用 `/localized_odom`，规划/控制用 `/odom_in_map`（map 帧）
+- 终端状态会打印 `base_only` / `fused` / `rejected`
+
+常用启动参数：
+
+```bash
+# 不使用静态地图（纯 SLAM 模式，从原点启动）
+ros2 launch dashgo_xfeat_bringup dashgo_nav_xfeat_odometry.launch.py use_static_map:=false
+
+# 关闭点云障碍物叠加（只用静态地图）
+ros2 launch dashgo_xfeat_bringup dashgo_nav_xfeat_odometry.launch.py use_pointcloud_obstacles:=false
+
+# 使用自定义地图
+ros2 launch dashgo_xfeat_bringup dashgo_nav_xfeat_odometry.launch.py nav_map_yaml:=/path/to/your_map.yaml
+```
 
 如果要看融合调试表格，默认位置是：
 
 ```bash
-/home/xu/xfeat_pose/odom_fusion_debug.csv
+/home/xu/xfeat_pose/real_odom_fusion_debug.csv
 ```
 
 ### 底盘单独启动
@@ -240,20 +266,73 @@ ros2 topic echo /control_mode --once
 
 真实机器人导航当前链路如下：
 
+### 传感器层
+
+- 底盘发布 `/odom`（轮式里程计）
 - 雷达发布 `/scan`
-- `scan_to_points_node` 将 `/scan` 转成 `/points_raw`
-- `nav_slam` 使用 `/points_raw`、`/odom`、静态地图进行处理
+- D435 发布 RGB-D 图像 `/camera/camera/color/image_raw`、`/camera/camera/aligned_depth_to_color/image_raw`
 - `dashgo_driver_ros2` 额外发布底盘 IMU 角度 `/imu_angle`、原始双值 `/imu_angles_raw`，以及标准 IMU `/imu/data`
-- 默认会把 IMU 的航向角融合进 `/odom` 的朝向，导航链路直接通过现有 `/odom` 受益
-- `start_nav` 发布 `/cmd_vel`
+
+### 全局定位（初始阶段）
+
+- `static_map_server` 读取 PGM+YAML 静态地图 → 发布 `/map`
+- `lidar_global_localize` 用 ORB 特征匹配将 `/scan` 与 PGM 静态地图对齐 → 锁定 `map→odom` 静态 TF（真实偏移，非 identity）
+- `map_once_relay` 将 `/map` 首帧以 transient_local QoS 转发到 `/map_for_amcl`
+
+### Odom 融合
+
+- `xfeat_rgbd_odometry` 用 XFeat 做前后帧匹配 + PnP → 发布 `/xfeat/odom` + `/xfeat/delta_odom`（局部增量）
+- `odom_fusion_node` 融合底盘 `/odom` + XFeat `/xfeat/delta_odom` → 发布 `/localized_odom`
+
+### 坐标变换（TF 树）
+
+```
+map ──(lidar_global_localize, 静态)──→ odom ──(odom_tf_bridge, 读 /localized_odom)──→ base_footprint
+```
+
+- `lidar_global_localize` 在启动时用 ORB 匹配锁定 `map→odom` TF（一次性）
+- `odom_tf_bridge` 持续读取 `/localized_odom` 发布 `odom→base_footprint` TF
+- `odom_map_tf` 发布 `map→odom` identity TF 作为 fallback（无静态地图时）
+- `odom_to_map_relay` 将 `/localized_odom` 变换到 map 帧 → 发布 `/odom_in_map`
+
+### 导航层
+
+- 激光扫描两条路径进入栅格地图：
+  - `scan_to_points_node` → `/points_raw` (base_link 帧) → `points_pub_map` → `/mapokk` (map 帧)
+  - `laser_scan_to_points` → 直接将 `/scan` 转到 map 帧 → `/mapokk`
+- `map_pub` 合并静态地图 + 实时点云障碍物 + 动态障碍物 → 发布 `/combined_grid`（建图里程计用 `/localized_odom`）
+- `voronoi_node` 基于 `/combined_grid` + `/odom_in_map` 生成 Voronoi 骨架路径 → 发布 `/path`
+- `start_nav` 增强 Pure Pursuit 控制器读取 `/odom_in_map` + `/path` + `/combined_grid` → 发布 `/cmd_vel`
 - `dashgo_driver_ros2` 接收 `/cmd_vel` 控制底盘
+
+### 增强 Pure Pursuit 特性（start_nav）
+
+- 可见性检查：查询 `/combined_grid` 确保前视目标点无遮挡
+- CTE（Cross-Track Error）Stanley 修正：根据横向偏差自动回正
+- 曲率前馈速度控制：大弯自动减速
+- 卡死检测与恢复：8 秒无进度 → 倒车 1.2s → 原地转向 2.0s → 恢复跟踪
+- 阻塞爬行：前方被遮挡时 0.05m/s 慢速爬行探测
+- 原地转向滞回：进入阈值 1.2rad / 退出阈值 0.4rad，防止掉头画弧
+
+### 网页控制
+
 - `dashgo_web_control` 通过网页提供模式切换、手动遥控和目标下发
+- 控制模式 (`/control_mode`)：`nav`（导航）/ `manual`（手动）/ `pause`（暂停）
+
+### 里程计分离原则
+
+| 用途 | 里程计来源 | 说明 |
+|------|-----------|------|
+| 建图 (map_pub) | `/localized_odom` | 融合了 XFeat 视觉修正，位姿更准 |
+| 规划 (voronoi) | `/odom_in_map` | map 帧，与全局地图对齐 |
+| 控制 (start_nav) | `/odom_in_map` | map 帧，与规划器坐标系一致 |
+| TF (odom_tf_bridge) | `/localized_odom` | RViz 中机器人位置与控制位置一致 |
 
 ## 当前限制
 
-- 这套导航当前更偏“里程计 + 点云/栅格 + 自定义规划控制”
+- 全局定位依赖预先建好的 PGM+YAML 静态地图，无地图时回退到纯 SLAM 模式（`map→odom`=identity，机器人从原点启动）
 - 不是标准 Nav2 的 `amcl` / `slam_toolbox` 全套定位导航方案
-- 如果后续需要标准雷达定位，需要继续补定位模块
+- `lidar_global_localize` 的 ORB 匹配在环境特征稀疏时可能定位失败
 
 ## 手机网页控制说明
 
@@ -316,10 +395,17 @@ source install/setup.bash
 
 ## 相关入口文件
 
-- [真实机器人总启动](./src/dashgo_driver_ros2/launch/dashgo_nav_real.launch.py)
+- [真实机器人总启动（含全局定位 + XFeat）](./src/dashgo_xfeat_bringup/launch/dashgo_nav_xfeat_odometry.launch.py)
+- [真实机器人导航启动](./src/dashgo_driver_ros2/launch/dashgo_nav_real.launch.py)
 - [底盘总启动](./src/dashgo_driver_ros2/launch/dashgo_robot.launch.py)
 - [底盘驱动](./src/dashgo_driver_ros2/dashgo_driver_ros2/dashgo_driver_node.py)
 - [雷达桥接](./src/dashgo_driver_ros2/dashgo_driver_ros2/scan_to_points_node.py)
+- [全局定位（ORB 匹配）](./src/nav_slam/nav_slam/lidar_global_localize.py)
+- [静态地图服务](./src/nav_slam/nav_slam/static_map_server.py)
+- [代价地图发布](./src/nav_slam/nav_slam/map_pub.py)
+- [增强 Pure Pursuit 控制器](./src/nav_slam/nav_slam/start_nav.py)
+- [里程融合节点](./src/dashgo_xfeat_bringup/dashgo_xfeat_bringup/odom_fusion_node.py)
+- [XFeat 视觉里程计](./src/dashgo_xfeat_bringup/dashgo_xfeat_bringup/xfeat_rgbd_odometry.py)
 - [网页控制节点](./src/dashgo_web_control/dashgo_web_control/web_control_node.py)
 - [网页控制前端](./src/dashgo_web_control/web/index.html)
 - [导航地图](./src/nav_slam/map/gpt.yaml)

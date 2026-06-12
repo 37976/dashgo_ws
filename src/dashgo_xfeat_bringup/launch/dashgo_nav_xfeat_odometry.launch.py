@@ -37,7 +37,6 @@ def generate_launch_description():
     min_score = LaunchConfiguration("min_score")
     depth_min_m = LaunchConfiguration("depth_min_m")
     depth_max_m = LaunchConfiguration("depth_max_m")
-    xfeat_repo_dir = LaunchConfiguration("xfeat_repo_dir")
     xfeat_weights_path = LaunchConfiguration("xfeat_weights_path")
     match_min_cossim = LaunchConfiguration("match_min_cossim")
     min_pnp_points = LaunchConfiguration("min_pnp_points")
@@ -69,7 +68,6 @@ def generate_launch_description():
         DeclareLaunchArgument("min_score", default_value="0.0"),
         DeclareLaunchArgument("depth_min_m", default_value="0.2"),
         DeclareLaunchArgument("depth_max_m", default_value="3.0"),
-        DeclareLaunchArgument("xfeat_repo_dir", default_value="/home/xu/project/XFeat"),
         DeclareLaunchArgument("xfeat_weights_path", default_value=""),
         DeclareLaunchArgument("match_min_cossim", default_value="0.65"),
         DeclareLaunchArgument("min_pnp_points", default_value="6"),
@@ -113,7 +111,6 @@ def generate_launch_description():
                         "rgb_topic": "/camera/camera/color/image_raw",
                         "depth_topic": "/camera/camera/aligned_depth_to_color/image_raw",
                         "camera_info_topic": "/camera/camera/color/camera_info",
-                        "xfeat_repo_dir": xfeat_repo_dir,
                         "xfeat_weights_path": xfeat_weights_path,
                         "top_k": top_k,
                         "detection_threshold": detection_threshold,
@@ -158,8 +155,8 @@ def generate_launch_description():
                         "start_lidar": "false",
                         "start_d435": "false",
                         "publish_robot_model": "true",
-                        "map_odom_topic": "/odom",
-                        "control_odom_topic": fused_odom_topic,
+                        "map_odom_topic": fused_odom_topic,
+                        "control_odom_topic": "/odom_in_map",
                     }.items(),
                 ),
             ],

@@ -31,7 +31,13 @@ setup(
             'points_pub_map = nav_slam.points_pub_map:main',
             'dynamic_obstacle_publisher = nav_slam.dynamic_obstacle_publisher:main',
             'start_nav = nav_slam.start_nav:main',
-            
+            'static_map_server = nav_slam.static_map_server:main',
+            'map_once_relay = nav_slam.map_once_relay:main',
+            'lidar_global_localize = nav_slam.lidar_global_localize:main',
+            'odom_to_map_relay = nav_slam.odom_to_map_relay:main',
+            'laser_scan_to_points = nav_slam.laser_scan_to_points:main',
+            'odom_tf_bridge = nav_slam.odom_tf_bridge:main',
+            'pose_logger = nav_slam.pose_logger:main',
         ],
     },
 )

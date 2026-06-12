@@ -1,19 +1,11 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>nav_slam</name>
+  <name>kidnapped_robot_finder</name>
   <version>0.0.0</version>
   <description>TODO: Package description</description>
-  <maintainer email="clb@ujssa.com">boxing</maintainer>
+  <maintainer email="name.surname@beko.com">saad</maintainer>
   <license>TODO: License declaration</license>
-
-  <depend>rclpy</depend>
-  <depend>geometry_msgs</depend>
-  <depend>nav_msgs</depend>
-  <depend>sensor_msgs</depend>
-  <depend>std_msgs</depend>
-  <depend>tf2_ros</depend>
-  <depend>kidnapped_robot_finder</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

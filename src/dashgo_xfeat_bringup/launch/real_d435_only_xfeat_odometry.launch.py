@@ -33,7 +33,6 @@ def generate_launch_description():
     depth_scale = LaunchConfiguration("depth_scale")
     depth_min_m = LaunchConfiguration("depth_min_m")
     depth_max_m = LaunchConfiguration("depth_max_m")
-    xfeat_repo_dir = LaunchConfiguration("xfeat_repo_dir")
     xfeat_weights_path = LaunchConfiguration("xfeat_weights_path")
     sync_queue_size = LaunchConfiguration("sync_queue_size")
     odom_topic = LaunchConfiguration("odom_topic")
@@ -68,12 +67,11 @@ def generate_launch_description():
         DeclareLaunchArgument("camera_info_topic", default_value="/camera/camera/color/camera_info"),
         DeclareLaunchArgument("top_k", default_value="256"),
         DeclareLaunchArgument("detection_threshold", default_value="0.05"),
-        DeclareLaunchArgument("min_score", default_value="0.08"),
+        DeclareLaunchArgument("min_score", default_value="0.0"),
         DeclareLaunchArgument("depth_scale", default_value="0.001"),
         DeclareLaunchArgument("depth_min_m", default_value="0.2"),
         DeclareLaunchArgument("depth_max_m", default_value="3.0"),
         DeclareLaunchArgument("sync_queue_size", default_value="10"),
-        DeclareLaunchArgument("xfeat_repo_dir", default_value="/home/xu/project/XFeat"),
         DeclareLaunchArgument("xfeat_weights_path", default_value=""),
         DeclareLaunchArgument("odom_topic", default_value="/xfeat/odom"),
         DeclareLaunchArgument("delta_odom_topic", default_value="/xfeat/delta_odom"),
@@ -81,10 +79,10 @@ def generate_launch_description():
         DeclareLaunchArgument("base_frame", default_value="base_footprint"),
         DeclareLaunchArgument("camera_frame", default_value="camera_color_optical_frame"),
         DeclareLaunchArgument("publish_tf", default_value="true"),
-        DeclareLaunchArgument("match_min_cossim", default_value="0.82"),
-        DeclareLaunchArgument("min_pnp_points", default_value="12"),
-        DeclareLaunchArgument("min_inliers", default_value="10"),
-        DeclareLaunchArgument("pnp_reproj_error", default_value="4.0"),
+        DeclareLaunchArgument("match_min_cossim", default_value="0.65"),
+        DeclareLaunchArgument("min_pnp_points", default_value="6"),
+        DeclareLaunchArgument("min_inliers", default_value="4"),
+        DeclareLaunchArgument("pnp_reproj_error", default_value="8.0"),
         DeclareLaunchArgument("pnp_iterations", default_value="200"),
         DeclareLaunchArgument("camera_mount_parent", default_value="base_footprint"),
         DeclareLaunchArgument("camera_mount_child", default_value="camera_link"),
@@ -128,7 +126,6 @@ def generate_launch_description():
                 "rgb_topic": rgb_topic,
                 "depth_topic": depth_topic,
                 "camera_info_topic": camera_info_topic,
-                "xfeat_repo_dir": xfeat_repo_dir,
                 "xfeat_weights_path": xfeat_weights_path,
                 "top_k": top_k,
                 "detection_threshold": detection_threshold,

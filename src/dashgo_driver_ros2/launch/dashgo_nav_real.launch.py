@@ -27,7 +27,7 @@ def resolve_qr_popup_script():
     source_path = os.path.expanduser(
         "~/project/dashgo_ws/src/dashgo_web_control/dashgo_web_control/show_web_qr_popup.py"
     )
-    
+
     if matches:
         return matches[0]
 
@@ -67,7 +67,7 @@ def generate_launch_description():
     resolved_ports = resolve_serial_ports()
     driver_share = get_package_share_directory("dashgo_driver_ros2")
     nav_share_dir = get_package_share_directory("nav_slam")
-    default_nav_map = os.path.join(nav_share_dir, "map", "gpt.yaml")
+    default_nav_map = os.path.join(nav_share_dir, "map", "gpt.yaml")              # 静态地图读取接口
     default_nav_rviz = os.path.join(nav_share_dir, "config", "rviz.rviz")
     default_robot_urdf = os.path.join(driver_share, "urdf", "dashgo_visual.urdf")
 
@@ -104,6 +104,12 @@ def generate_launch_description():
     map_odom_topic = LaunchConfiguration("map_odom_topic")
     control_odom_topic = LaunchConfiguration("control_odom_topic")
 
+    # 新增：全局定位相关参数
+    use_static_map = LaunchConfiguration("use_static_map")
+    use_global_localize = LaunchConfiguration("use_global_localize")
+    use_pointcloud_obstacles = LaunchConfiguration("use_pointcloud_obstacles")
+    use_dynamic_obstacle_points = LaunchConfiguration("use_dynamic_obstacle_points")
+
     return LaunchDescription(
         [
             DeclareLaunchArgument("start_robot", default_value="true"),
@@ -135,8 +141,13 @@ def generate_launch_description():
             DeclareLaunchArgument("hotspot_ssid", default_value="Dashgo-Robot"),
             DeclareLaunchArgument("hotspot_password", default_value="dashgo12345"),
             DeclareLaunchArgument("hotspot_ifname", default_value=""),
-            DeclareLaunchArgument("map_odom_topic", default_value="/odom"),
-            DeclareLaunchArgument("control_odom_topic", default_value="/odom"),
+            DeclareLaunchArgument("map_odom_topic", default_value="/localized_odom"),
+            DeclareLaunchArgument("control_odom_topic", default_value="/odom_in_map"),
+            # 新增：全局定位相关参数
+            DeclareLaunchArgument("use_static_map", default_value="true"),
+            DeclareLaunchArgument("use_global_localize", default_value="true"),
+            DeclareLaunchArgument("use_pointcloud_obstacles", default_value="true"),
+            DeclareLaunchArgument("use_dynamic_obstacle_points", default_value="false"),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(robot_launch),
                 condition=IfCondition(start_robot),
@@ -170,6 +181,7 @@ def generate_launch_description():
                     }
                 ],
             ),
+            # ---- 激光扫描转点云 (base_link 帧) ----
             Node(
                 package="dashgo_driver_ros2",
                 executable="scan_to_points_node",
@@ -189,12 +201,60 @@ def generate_launch_description():
                     }
                 ],
             ),
+            # ---- 全局定位：静态地图服务器 ----
+            Node(
+                package="nav_slam",
+                executable="static_map_server",
+                name="static_map_server",
+                condition=IfCondition(start_nav),
+                output="screen",
+                parameters=[{
+                    "map_yaml_path": nav_map_yaml,
+                    "publish_period_sec": 1.0,
+                    "frame_id": "map",
+                }],
+            ),
+            # ---- 全局定位：一次性地图转发 ----
+            Node(
+                package="nav_slam",
+                executable="map_once_relay",
+                name="map_once_relay",
+                condition=IfCondition(start_nav),
+                output="screen",
+            ),
+            # ---- 全局定位：激光 ORB 全局定位 ----
+            Node(
+                package="nav_slam",
+                executable="lidar_global_localize",
+                name="lidar_global_localize",
+                condition=IfCondition(start_nav),
+                output="screen",
+                parameters=[{
+                    "map_yaml_path": nav_map_yaml,
+                    "scan_topic": "/scan",
+                }],
+            ),
+            # ---- 激光扫描直接转 map 帧点云 ----
+            Node(
+                package="nav_slam",
+                executable="laser_scan_to_points",
+                name="laser_scan_to_points",
+                condition=IfCondition(start_nav),
+                output="screen",
+                parameters=[{
+                    "scan_topic": "/scan",
+                    "output_topic": "/mapokk",
+                    "target_frame": "map",
+                }],
+            ),
+            # ---- Voronoi 骨架规划器 ----
             Node(
                 package="nav2_voronoi_planner",
                 executable="voronoi_node",
                 name="voronoi",
                 condition=IfCondition(start_nav),
                 output="screen",
+                remappings=[("/odom", "/odom_in_map")],
                 parameters=[
                     {
                         "robot_radius": 0.20,
@@ -204,6 +264,7 @@ def generate_launch_description():
                     }
                 ],
             ),
+            # ---- 代价地图发布 ----
             Node(
                 package="nav_slam",
                 executable="map_pub",
@@ -212,22 +273,46 @@ def generate_launch_description():
                 output="screen",
                 parameters=[
                     {
-                        "use_static_map": False,
+                        "use_static_map": use_static_map,
                         "static_map_yaml": nav_map_yaml,
                         "grid_width": 40.0,
                         "grid_height": 40.0,
                         "resolution": 0.05,
-                        "dynamic_obstacle_timeout": 0.8,
+                        "dynamic_obstacle_timeout": 0.6,
                         "accumulate_pointcloud_obstacles": False,
                         "min_height": 0.0,
                         "max_height": 1.0,
                         "obstacle_radius": 0.08,
                         "clear_radius": 0.20,
-                        "projection_gap_fill_cells": 1,
+                        "projection_gap_fill_cells": 0,
                         "odom_topic": map_odom_topic,
+                        "use_pointcloud_obstacles": use_pointcloud_obstacles,
+                        "use_dynamic_obstacle_points": use_dynamic_obstacle_points,
                     }
                 ],
             ),
+            # ---- odom → base_footprint TF 桥接 ----
+            Node(
+                package="nav_slam",
+                executable="odom_tf_bridge",
+                name="odom_tf_bridge",
+                condition=IfCondition(start_nav),
+                output="screen",
+                parameters=[{"odom_topic": map_odom_topic}],
+            ),
+            # ---- odom → map 坐标中转 ----
+            Node(
+                package="nav_slam",
+                executable="odom_to_map_relay",
+                name="odom_to_map_relay",
+                condition=IfCondition(start_nav),
+                output="screen",
+                parameters=[{
+                    "odom_topic": map_odom_topic,
+                    "output_topic": control_odom_topic,
+                }],
+            ),
+            # ---- map→odom fallback 静态 TF (无全局定位时) ----
             Node(
                 package="nav_slam",
                 executable="odom_map_tf",
@@ -235,6 +320,7 @@ def generate_launch_description():
                 condition=IfCondition(start_nav),
                 output="screen",
             ),
+            # ---- 点云坐标系变换 ----
             Node(
                 package="nav_slam",
                 executable="points_pub_map",
@@ -243,6 +329,7 @@ def generate_launch_description():
                 output="screen",
                 parameters=[{"frame_id": "map"}, {"odom_topic": map_odom_topic}],
             ),
+            # ---- 路径跟踪控制器 ----
             Node(
                 package="nav_slam",
                 executable="start_nav",
@@ -251,6 +338,7 @@ def generate_launch_description():
                 output="screen",
                 parameters=[{"odom_topic": control_odom_topic}],
             ),
+            # ---- RViz ----
             Node(
                 package="rviz2",
                 executable="rviz2",
@@ -259,6 +347,7 @@ def generate_launch_description():
                 output="screen",
                 arguments=["-d", default_nav_rviz],
             ),
+            # ---- Web 控制 ----
             Node(
                 package="dashgo_web_control",
                 executable="web_control_node",
