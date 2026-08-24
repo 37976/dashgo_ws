@@ -1,0 +1,72 @@
+%YAML:1.0
+
+# ============================================================
+# ORB-SLAM3 RGB-D 配置文件 — Intel RealSense D435
+# ============================================================
+# 由 dashgo_rgbd_recorder/export_dataset.py 自动生成
+# 内参从 /camera/camera/color/camera_info 提取，depth_scale 从录制配置读取
+#
+# 数据集运行方式（ORB-SLAM3 根目录）:
+#   ./Examples/RGB-D/rgbd_tum   \
+#     Vocabulary/ORBvoc.txt     \
+#     ORB_SLAM3_D435.yaml       \
+#     <dataset_dir>             \
+#     <dataset_dir>/associate.txt
+# ============================================================
+
+File.version: "1.0"
+
+Camera.type: "PinHole"
+
+# ---- 相机内参（从 camera_info 填入）----
+Camera1.fx: {{FX}}
+Camera1.fy: {{FY}}
+Camera1.cx: {{CX}}
+Camera1.cy: {{CY}}
+
+# D435 驱动层已校正畸变，系数全为 0
+Camera1.k1: 0.0
+Camera1.k2: 0.0
+Camera1.p1: 0.0
+Camera1.p2: 0.0
+Camera1.k3: 0.0
+
+Camera.width: {{WIDTH}}
+Camera.height: {{HEIGHT}}
+
+# ORB-SLAM3 帧率设一半以降低计算量（实际录制 30fps）
+Camera.fps: {{FPS}}
+
+# RGB-D 模式
+Camera.RGB: 1
+
+# ---- RGB-D 参数 ----
+# 深度阈值：超过此值（米）的点被过滤
+Stereo.ThDepth: 40.0
+# 虚拟基线（RGB-D 模式下仅为占位值，实际不使用）
+Stereo.b: 0.0745
+# 深度缩放因子：像素值 / DepthMapFactor = 米
+RGBD.DepthMapFactor: {{DEPTH_SCALE}}
+
+# ---- ORB 特征提取参数 ----
+ORBextractor.nFeatures: 1000
+ORBextractor.scaleFactor: 1.2
+ORBextractor.nLevels: 8
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+# ---- 可视化参数 ----
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1.0
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2.0
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3.0
+Viewer.ViewpointX: 0.0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -1.8
+Viewer.ViewpointF: 500.0
+Viewer.imageViewScale: 1.0
+
+# ---- 远点过滤 ----
+System.thFarPoints: 40.0

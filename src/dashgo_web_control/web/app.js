@@ -17,6 +17,12 @@ const state = {
   },
 };
 
+const mappingState = {
+  status: "idle",
+  filename: "my_map",
+  hasMap: false,
+};
+
 const canvas = document.getElementById("map-canvas");
 const ctx = canvas.getContext("2d");
 const statusLine = document.getElementById("status-line");
@@ -24,24 +30,29 @@ const poseText = document.getElementById("pose-text");
 const velocityText = document.getElementById("velocity-text");
 const mapText = document.getElementById("map-text");
 const goalText = document.getElementById("goal-text");
-const manualPoseText = document.getElementById("manual-pose-text");
-const manualVelocityText = document.getElementById("manual-velocity-text");
+const mappingPoseText = document.getElementById("mapping-pose-text");
+const mappingMapSizeText = document.getElementById("mapping-map-size-text");
+const mappingStatusText = document.getElementById("mapping-status-text");
 const pageTitle = document.getElementById("page-title");
 const navPage = document.getElementById("nav-page");
-const manualPage = document.getElementById("manual-page");
+const mappingPage = document.getElementById("mapping-page");
 
 const joystickBase = document.getElementById("joystick-base");
 const joystickKnob = document.getElementById("joystick-knob");
 const stopButton = document.getElementById("stop-button");
 const refreshMapButton = document.getElementById("refresh-map-button");
-const manualModeButton = document.getElementById("manual-mode-button");
+const mappingModeButton = document.getElementById("mapping-mode-button");
 const navModeButton = document.getElementById("nav-mode-button");
 const fitMapButton = document.getElementById("fit-map-button");
 const pickGoalButton = document.getElementById("pick-goal-button");
 const clearGoalButton = document.getElementById("clear-goal-button");
 const confirmGoalButton = document.getElementById("confirm-goal-button");
-const cameraFrame = document.getElementById("camera-frame");
-const cameraStatus = document.getElementById("camera-status");
+const startMappingButton = document.getElementById("start-mapping-button");
+const saveMapButton = document.getElementById("save-map-button");
+const mapFilenameInput = document.getElementById("map-filename-input");
+const mappingStatusBadge = document.getElementById("mapping-status-badge");
+const mapCanvasMapping = document.getElementById("map-canvas-mapping");
+const ctxMapping = mapCanvasMapping ? mapCanvasMapping.getContext("2d") : null;
 const modeText = document.getElementById("mode-text");
 const modeDot = document.getElementById("mode-dot");
 const radarDot = document.getElementById("radar-dot");
@@ -61,8 +72,6 @@ let lastCmd = { linear: 0, angular: 0 };
 let mapGesture = null;
 let mapPointers = new Map();
 let mapImage = null;
-let cameraTimer = null;
-let statusOverrideUntil = 0;
 let renderQueued = false;
 
 function clamp(value, low, high) {
@@ -134,21 +143,21 @@ function resizeCanvas() {
 }
 
 function setModeButtons(mode) {
-  const wasManualActive = manualPage.classList.contains("active");
-  const wasNavActive = navPage.classList.contains("active");
-  const isManual = mode === "manual";
-  manualModeButton.classList.toggle("active", isManual);
-  navModeButton.classList.toggle("active", !isManual);
-  joystickBase.classList.toggle("disabled", mode !== "manual");
-  navPage.classList.toggle("active", !isManual);
-  manualPage.classList.toggle("active", isManual);
-  pageTitle.textContent = isManual ? "手动页面" : "导航页面";
-  if (isManual && !wasManualActive) {
-    startCameraLoop();
-  } else if (!isManual && !wasNavActive) {
-    stopCameraLoop();
+  const isMapping = mode === "mapping";
+  mappingModeButton.classList.toggle("active", isMapping);
+  navModeButton.classList.toggle("active", !isMapping);
+  joystickBase.classList.toggle("disabled", !isMapping);
+  navPage.classList.toggle("active", !isMapping);
+  mappingPage.classList.toggle("active", isMapping);
+  pageTitle.textContent = isMapping ? "建图页面" : "导航页面";
+
+  if (isMapping) {
+    // Refresh map and canvas when entering mapping mode
+    fetchMap().catch(() => {});
     window.requestAnimationFrame(() => {
-      resizeCanvas();
+      if (mapCanvasMapping && state.map) {
+        resizeMappingCanvas();
+      }
     });
   }
 }
@@ -844,6 +853,13 @@ async function fetchStatus() {
       fetchPath();
     }
 
+    // Parse SLAM status from payload
+    if (payload.slam_status !== undefined) {
+      mappingState.status = payload.slam_status;
+      mappingState.filename = payload.slam_filename || "my_map";
+      mappingState.hasMap = payload.slam_has_map;
+    }
+
     updateStatusCards();
     setModeButtons(payload.control_mode || "nav");
     requestRender();
@@ -920,8 +936,7 @@ function updateStatusCards() {
   velocityText.textContent = odom
     ? `v ${formatNumber(odom.linear_x)}  w ${formatNumber(odom.angular_z)}`
     : "--";
-  manualPoseText.textContent = poseText.textContent;
-  manualVelocityText.textContent = velocityText.textContent;
+  mappingPoseText.textContent = poseText.textContent;
   mapText.textContent = state.map
     ? `${state.map.width}×${state.map.height} @ ${formatNumber(state.map.resolution)}m`
     : "等待地图";
@@ -929,21 +944,9 @@ function updateStatusCards() {
     ? `${state.pendingGoal ? "候选" : "目标"} x ${formatNumber(goal.x)}  y ${formatNumber(goal.y)}`
     : "未设置";
 
-  if (state.status?.has_camera && state.status?.camera) {
-    cameraStatus.textContent = `${state.status.camera.width}×${state.status.camera.height}`;
-  } else {
-    cameraStatus.textContent = "等待相机";
-  }
-
-  if (mode === "manual" && devices.camera) {
-    startCameraLoop();
-  } else if (mode !== "manual" || !devices.camera) {
-    stopCameraLoop();
-  }
-
-  stopButton.textContent = mode === "manual" ? "急停" : isPaused ? "继续" : "暂停";
-  modeText.textContent = mode === "manual" ? "手动" : isPaused ? "暂停" : "导航";
-  setStatusDot(modeDot, true, mode === "manual" || isPaused ? "manual" : "nav");
+  stopButton.textContent = mode === "mapping" ? "急停" : isPaused ? "继续" : "暂停";
+  modeText.textContent = mode === "mapping" ? "建图" : isPaused ? "暂停" : "导航";
+  setStatusDot(modeDot, true, mode === "mapping" || isPaused ? "mapping" : "nav");
   setStatusDot(radarDot, Boolean(devices.radar));
   setStatusDot(baseDot, Boolean(devices.base));
   setStatusDot(cameraDot, Boolean(devices.camera));
@@ -1006,7 +1009,7 @@ function applyJoystickSnap(nx, ny) {
 }
 
 async function flushCmdVel() {
-  if (state.status?.control_mode !== "manual") {
+  if (state.status?.control_mode !== "mapping") {
     return;
   }
   if (cmdVelRequestInFlight) {
@@ -1040,7 +1043,7 @@ function stopCmdVelLoop() {
 }
 
 function queueCmdVel(linear, angular) {
-  if (state.status?.control_mode !== "manual") {
+  if (state.status?.control_mode !== "mapping") {
     return;
   }
   lastCmd = { linear, angular };
@@ -1077,7 +1080,7 @@ function onJoystickMove(clientX, clientY) {
 }
 
 joystickBase.addEventListener("pointerdown", (event) => {
-  if (state.status?.control_mode !== "manual") {
+  if (state.status?.control_mode !== "mapping") {
     setStatusMessage("导航模式下摇杆已禁用，请先切到手动模式。", 2200);
     return;
   }
@@ -1179,7 +1182,7 @@ function finishMapGesture(event) {
   );
 
   if (wasTap && state.goalPickArmed) {
-    if (state.status?.control_mode === "manual") {
+    if (state.status?.control_mode === "mapping") {
       setStatusMessage("当前是手动模式，先切到导航模式再选目标。", 2500);
     } else {
       const mapPixel = canvasToMapPixel(point.x, point.y);
@@ -1223,7 +1226,7 @@ canvas.addEventListener("pointercancel", finishMapGesture);
 
 stopButton.addEventListener("click", async () => {
   try {
-    if (state.status?.control_mode === "manual") {
+    if (state.status?.control_mode === "mapping") {
       await apiPost("/api/hold", {});
       resetJoystick();
       setStatusMessage("已急停并清空手动速度。", 1800);
@@ -1246,18 +1249,18 @@ stopButton.addEventListener("click", async () => {
   }
 });
 
-manualModeButton.addEventListener("click", async () => {
+mappingModeButton.addEventListener("click", async () => {
   try {
-    await apiPost("/api/mode", { mode: "manual" });
+    await apiPost("/api/mode", { mode: "mapping" });
     await apiPost("/api/hold", {});
     if (state.status) {
-      state.status.control_mode = "manual";
+      state.status.control_mode = "mapping";
     }
-    setModeButtons("manual");
-    setStatusMessage("已切到手动模式。", 1800);
+    setModeButtons("mapping");
+    setStatusMessage("已切到建图模式，可使用摇杆遥控建图。", 1800);
     updateStatusCards();
   } catch (error) {
-    setStatusMessage(`切换手动模式失败：${error.message}`, 3000);
+    setStatusMessage(`切换建图模式失败：${error.message}`, 3000);
   }
 });
 
@@ -1303,7 +1306,7 @@ confirmGoalButton.addEventListener("click", async () => {
   if (!state.pendingGoal) {
     return;
   }
-  if (state.status?.control_mode === "manual") {
+  if (state.status?.control_mode === "mapping") {
     setStatusMessage("当前是手动模式，先切到导航模式再确认。", 2500);
     return;
   }
@@ -1327,60 +1330,155 @@ refreshMapButton.addEventListener("click", () => {
   });
 });
 
-function refreshCameraFrame() {
-  if (!state.status?.devices?.camera) {
-    cameraFrame.removeAttribute("src");
-    cameraStatus.textContent = "等待相机";
-    return;
-  }
-  if (cameraFrame.src.includes("/api/camera/stream.mjpg")) {
-    return;
-  }
-  cameraFrame.src = `/api/camera/stream.mjpg?ts=${Date.now()}`;
-}
-
-function stopCameraLoop() {
-  if (cameraTimer) {
-    clearTimeout(cameraTimer);
-    cameraTimer = null;
-  }
-  cameraFrame.removeAttribute("src");
-}
-
-function startCameraLoop() {
-  if (state.status?.control_mode !== "manual") {
-    return;
-  }
-  refreshCameraFrame();
-}
-
-function queueNextCameraFrame(delayMs = 0) {
-  if (cameraTimer) {
-    clearTimeout(cameraTimer);
-  }
-  cameraTimer = setTimeout(() => {
-    cameraTimer = null;
-    refreshCameraFrame();
-  }, delayMs);
-}
-
-cameraFrame.addEventListener("load", () => {
-  if (cameraTimer) {
-    clearTimeout(cameraTimer);
-    cameraTimer = null;
-  }
-});
-
-cameraFrame.addEventListener("error", () => {
-  if (state.status?.control_mode === "manual") {
-    cameraFrame.removeAttribute("src");
-    queueNextCameraFrame(500);
-  }
-});
-
 window.addEventListener("resize", () => {
   resizeCanvas();
 });
+
+// ── Mapping mode functions ──────────────────────────────────────
+
+async function fetchSlamStatus() {
+  try {
+    const payload = await apiGet("/api/slam_status");
+    if (payload.ok) {
+      mappingState.status = payload.status;
+      mappingState.filename = payload.filename || "my_map";
+      mappingState.hasMap = payload.has_map;
+      updateMappingUI();
+    }
+  } catch (e) {
+    // SLAM endpoint not available
+  }
+}
+
+function updateMappingUI() {
+  const statusLabels = { idle: "空闲", mapping: "建图中...", saving: "保存中...", error: "错误" };
+  if (mappingStatusText) {
+    mappingStatusText.textContent = statusLabels[mappingState.status] || mappingState.status;
+  }
+  if (mappingStatusBadge) {
+    mappingStatusBadge.textContent = statusLabels[mappingState.status] || mappingState.status;
+  }
+  if (startMappingButton) {
+    startMappingButton.disabled = mappingState.status === "mapping";
+  }
+  if (saveMapButton) {
+    saveMapButton.disabled = mappingState.status === "idle" || !mappingState.hasMap;
+  }
+  if (mapFilenameInput) {
+    mapFilenameInput.value = mappingState.filename;
+  }
+  if (mappingMapSizeText && state.map) {
+    mappingMapSizeText.textContent = `${state.map.width}×${state.map.height}`;
+  }
+  // Refresh mapping canvas when in mapping mode
+  if (mappingPage && mappingPage.classList.contains("active") && ctxMapping && state.map) {
+    renderMappingScene();
+  }
+}
+
+function resizeMappingCanvas() {
+  if (!mapCanvasMapping) return;
+  const logicalWidth = mapCanvasMapping.parentElement
+    ? mapCanvasMapping.parentElement.clientWidth
+    : mapCanvasMapping.clientWidth;
+  const size = Math.max(320, Math.floor(logicalWidth));
+  mapCanvasMapping.width = size;
+  mapCanvasMapping.height = size;
+}
+
+function renderMappingScene() {
+  if (!ctxMapping || !mapCanvasMapping || !state.map) return;
+
+  const w = mapCanvasMapping.width;
+  const h = mapCanvasMapping.height;
+  const ctr = { x: w / 2, y: h / 2 };
+
+  ctxMapping.save();
+  // Background
+  const grad = ctxMapping.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, "#f9fcff");
+  grad.addColorStop(1, "#e9f0f7");
+  ctxMapping.fillStyle = grad;
+  ctxMapping.fillRect(0, 0, w, h);
+
+  if (mapImage) {
+    ctxMapping.save();
+    ctxMapping.imageSmoothingEnabled = false;
+    ctxMapping.translate(ctr.x, ctr.y);
+    ctxMapping.rotate(getMapRotation());
+    ctxMapping.scale(state.mapView.scale, state.mapView.scale);
+    ctxMapping.translate(-state.mapView.centerX, -state.mapView.centerY);
+    ctxMapping.drawImage(mapImage, 0, 0, state.map.width, state.map.height);
+    ctxMapping.restore();
+  }
+
+  // Draw robot — compute using mapping canvas dimensions
+  if (state.status?.odom) {
+    const pose = state.status.odom;
+    const mp = getMapPixelFromWorld(pose.x, pose.y);
+    const rotation = getMapRotation();
+    const rel = rotateVector(
+      (mp.x - state.mapView.centerX) * state.mapView.scale,
+      (mp.y - state.mapView.centerY) * state.mapView.scale,
+      rotation,
+    );
+    const px = ctr.x + rel.x;
+    const py = ctr.y + rel.y;
+
+    const screenYaw = -pose.yaw + rotation;
+    ctxMapping.save();
+    ctxMapping.translate(px, py);
+    ctxMapping.rotate(screenYaw);
+    ctxMapping.fillStyle = "#0f76d6";
+    ctxMapping.beginPath();
+    ctxMapping.arc(0, 0, 10, 0, Math.PI * 2);
+    ctxMapping.fill();
+    ctxMapping.fillStyle = "#ffffff";
+    ctxMapping.beginPath();
+    ctxMapping.moveTo(9, 0);
+    ctxMapping.lineTo(-2, 5);
+    ctxMapping.lineTo(-2, -5);
+    ctxMapping.closePath();
+    ctxMapping.fill();
+    ctxMapping.restore();
+  }
+  ctxMapping.restore();
+}
+
+// ── Mapping button events ──────────────────────────────────────
+
+if (startMappingButton) {
+  startMappingButton.addEventListener("click", async () => {
+    try {
+      await apiPost("/api/slam/start", {});
+      setStatusMessage("建图已启动，请使用摇杆遥控机器人探索环境...", 3000);
+      fetchSlamStatus();
+    } catch (e) {
+      setStatusMessage(`启动建图失败: ${e.message}`, 3000);
+    }
+  });
+}
+
+if (saveMapButton) {
+  saveMapButton.addEventListener("click", async () => {
+    try {
+      const filename = mapFilenameInput ? mapFilenameInput.value.trim() : "my_map";
+      if (filename) {
+        await apiPost("/api/slam/set_filename", { filename });
+      }
+      const result = await apiPost("/api/slam/save", {});
+      if (result.ok) {
+        setStatusMessage(`地图已保存为 ${filename || "my_map"}.pgm`, 3000);
+      } else {
+        setStatusMessage(`保存失败: ${result.message}`, 3000);
+      }
+    } catch (e) {
+      setStatusMessage(`保存地图失败: ${e.message}`, 3000);
+    }
+  });
+}
+
+// ── Init ───────────────────────────────────────────────────────
 
 resizeCanvas();
 setModeButtons("nav");
@@ -1388,3 +1486,4 @@ fetchStatus();
 fetchMap().catch(() => {});
 fetchPath().catch(() => {});
 setInterval(fetchStatus, 250);
+setInterval(fetchSlamStatus, 2000);

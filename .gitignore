@@ -10,3 +10,5 @@ src/sllidar_ros2/sdk/build/
 src/sllidar_ros2/sdk/devel/
 src/sllidar_ros2/sdk/Makefile
 src/sllidar_ros2/sdk/.catkin_workspace
+room_static_01/
+room_static_01.zip

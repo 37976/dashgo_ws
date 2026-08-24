@@ -12,6 +12,7 @@ import rclpy
 import rclpy.time
 import sensor_msgs_py.point_cloud2 as pc2
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan, PointCloud2
 from tf2_ros import Buffer, TransformException, TransformListener
 
@@ -38,7 +39,7 @@ class LaserScanToPoints(Node):
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
 
-        self._sub = self.create_subscription(LaserScan, scan_topic, self._on_scan, 10)
+        self._sub = self.create_subscription(LaserScan, scan_topic, self._on_scan, qos_profile_sensor_data)
         self._pub = self.create_publisher(PointCloud2, output_topic, 10)
 
         self._tf_ok = False

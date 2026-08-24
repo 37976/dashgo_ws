@@ -75,7 +75,8 @@ def _score_lidar(candidate):
     elif "Silicon_Labs" in props.get("ID_VENDOR", ""):
         score = 30
 
-    if _has_by_id_path(candidate):
+    # 只有匹配到已知设备类型时才给 by-id 路径加分
+    if score < 1000 and _has_by_id_path(candidate):
         score -= 1
 
     return score
@@ -94,7 +95,7 @@ def _score_driver(candidate):
     elif "QinHeng" in props.get("ID_VENDOR_FROM_DATABASE", ""):
         score = 30
 
-    if _has_by_id_path(candidate):
+    if score < 1000 and _has_by_id_path(candidate):
         score -= 1
 
     return score

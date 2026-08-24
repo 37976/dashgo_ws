@@ -12,6 +12,7 @@ import numpy as np
 import rclpy
 import yaml
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
@@ -69,7 +70,7 @@ class LidarGlobalLocalize(Node):
         self._origin_offset = int(self._max_range / self._map_resolution)
 
         self._scan_sub = self.create_subscription(
-            LaserScan, self._scan_topic, self._scan_callback, 10)
+            LaserScan, self._scan_topic, self._scan_callback, qos_profile_sensor_data)
         self._odom_sub = self.create_subscription(
             Odometry, "/localized_odom", self._odom_callback, 10)
         self._tf_broadcaster = StaticTransformBroadcaster(self)

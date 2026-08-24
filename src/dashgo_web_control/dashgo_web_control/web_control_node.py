@@ -23,6 +23,7 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image, LaserScan, PointCloud2
 import sensor_msgs_py.point_cloud2 as pc2
 from std_msgs.msg import String
+from std_srvs.srv import Trigger
 
 
 def quaternion_to_yaw(q):
@@ -85,6 +86,11 @@ class WebControlNode(Node):
         self.scan_online_timeout = float(self.get_parameter("scan_online_timeout").value)
         self.camera_online_timeout = float(self.get_parameter("camera_online_timeout").value)
 
+        self.declare_parameter("slam_status_topic", "/mapping_status")
+        self.declare_parameter("slam_save_service", "/slam_controller/save_map")
+        self.slam_status_topic = str(self.get_parameter("slam_status_topic").value)
+        self.slam_save_service = str(self.get_parameter("slam_save_service").value)
+
         self.web_dir = os.path.join(get_package_share_directory("dashgo_web_control"), "web")
         self.state_lock = threading.Lock()
         self.map_version = 0
@@ -96,6 +102,9 @@ class WebControlNode(Node):
         self.odom_snapshot = None
         self.goal_snapshot = None
         self.control_mode = "nav"
+        self.slam_status = "idle"
+        self.slam_map_filename = ""
+        self.slam_has_map = False
         self.last_cmd_time = 0.0
         self.last_cmd_active = False
         self.manual_linear_cmd = 0.0
@@ -121,6 +130,8 @@ class WebControlNode(Node):
             self.create_subscription(LaserScan, self.scan_topic, self.scan_callback, qos_profile_sensor_data)
         if self.pointcloud_topic:
             self.create_subscription(PointCloud2, self.pointcloud_topic, self.pointcloud_callback, qos_profile_sensor_data)
+        if self.slam_status_topic:
+            self.create_subscription(String, self.slam_status_topic, self.slam_status_callback, 10)
 
         self.watchdog_timer = self.create_timer(0.1, self.watchdog_callback)
         self.manual_cmd_timer = self.create_timer(
@@ -327,7 +338,7 @@ class WebControlNode(Node):
 
     def manual_cmd_loop_callback(self):
         with self.state_lock:
-            if self.control_mode != "manual" or not self.last_cmd_active:
+            if self.control_mode != "mapping" or not self.last_cmd_active:
                 return
             linear = self.manual_linear_cmd
             angular = self.manual_angular_cmd
@@ -335,7 +346,7 @@ class WebControlNode(Node):
 
     def is_manual_mode(self):
         with self.state_lock:
-            return self.control_mode == "manual"
+            return self.control_mode == "mapping"
 
     def is_paused_mode(self):
         with self.state_lock:
@@ -367,14 +378,14 @@ class WebControlNode(Node):
 
     def set_control_mode(self, mode):
         clean_mode = mode.strip().lower()
-        if clean_mode not in ("manual", "nav", "pause"):
+        if clean_mode not in ("mapping", "nav", "pause"):
             raise ValueError(f"Unsupported control mode: {mode}")
 
         msg = String()
         msg.data = clean_mode
         self.mode_pub.publish(msg)
 
-        if clean_mode in ("manual", "pause"):
+        if clean_mode in ("mapping", "pause"):
             self.stop_robot()
 
         with self.state_lock:
@@ -399,6 +410,9 @@ class WebControlNode(Node):
                 "odom": self.odom_snapshot,
                 "goal": self.goal_snapshot,
                 "control_mode": self.control_mode,
+                "slam_status": self.slam_status,
+                "slam_filename": self.slam_map_filename,
+                "slam_has_map": self.slam_has_map,
                 "has_camera": self.camera_frame is not None,
                 "camera": self.camera_meta,
                 "devices": {
@@ -469,6 +483,21 @@ class WebControlNode(Node):
     def build_camera_stream_frame(self):
         with self.state_lock:
             return self.camera_version, self.camera_frame
+
+    def slam_status_callback(self, msg):
+        with self.state_lock:
+            self.slam_status = msg.data.strip().lower()
+            if self.slam_status == "mapping":
+                self.slam_has_map = True
+
+    def build_slam_status_payload(self):
+        with self.state_lock:
+            return {
+                "ok": True,
+                "status": self.slam_status,
+                "filename": self.slam_map_filename or "dashgo_slam_map",
+                "has_map": self.slam_has_map,
+            }
 
     def convert_image_to_jpeg(self, msg):
         if msg.encoding not in ("rgb8", "bgr8", "rgba8", "bgra8", "mono8"):
@@ -640,6 +669,9 @@ class WebControlNode(Node):
                 if parsed.path == "/api/path":
                     self.send_json(node.build_path_payload())
                     return
+                if parsed.path == "/api/slam_status":
+                    self.send_json(node.build_slam_status_payload())
+                    return
                 if parsed.path == "/api/camera/meta":
                     self.send_json(node.build_camera_meta_payload())
                     return
@@ -724,6 +756,55 @@ class WebControlNode(Node):
                     yaw = float(payload.get("yaw", 0.0))
                     node.publish_goal(x, y, yaw)
                     self.send_json({"ok": True})
+                    return
+
+                if parsed.path == "/api/slam/start":
+                    node.set_control_mode("mapping")
+                    self.send_json({"ok": True})
+                    return
+
+                if parsed.path == "/api/slam/stop":
+                    node.set_control_mode("nav")
+                    self.send_json({"ok": True})
+                    return
+
+                if parsed.path == "/api/slam/save":
+                    # Call slam_controller save_map service
+                    if not hasattr(node, "slam_save_client"):
+                        node.slam_save_client = node.create_client(
+                            Trigger, node.slam_save_service
+                        )
+                    if not node.slam_save_client.wait_for_service(timeout_sec=3.0):
+                        self.send_json(
+                            {"ok": False, "message": "SLAM save service not available"},
+                            status=HTTPStatus.SERVICE_UNAVAILABLE,
+                        )
+                        return
+                    req = Trigger.Request()
+                    future = node.slam_save_client.call_async(req)
+                    # Spin until done (briefly)
+                    start = time.monotonic()
+                    while not future.done() and (time.monotonic() - start) < 5.0:
+                        time.sleep(0.05)
+                    if not future.done():
+                        self.send_json(
+                            {"ok": False, "message": "Save timed out"},
+                            status=HTTPStatus.GATEWAY_TIMEOUT,
+                        )
+                        return
+                    result = future.result()
+                    self.send_json({
+                        "ok": result.success,
+                        "message": result.message,
+                    })
+                    return
+
+                if parsed.path == "/api/slam/set_filename":
+                    filename = str(payload.get("filename", ""))
+                    if filename:
+                        with node.state_lock:
+                            node.slam_map_filename = filename
+                    self.send_json({"ok": True, "filename": filename})
                     return
 
                 if parsed.path == "/api/mode":

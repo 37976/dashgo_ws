@@ -7,7 +7,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, LogInfo, TimerAction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 
@@ -67,7 +67,7 @@ def generate_launch_description():
     resolved_ports = resolve_serial_ports()
     driver_share = get_package_share_directory("dashgo_driver_ros2")
     nav_share_dir = get_package_share_directory("nav_slam")
-    default_nav_map = os.path.join(nav_share_dir, "map", "gpt.yaml")              # 静态地图读取接口
+    default_nav_map = os.path.join(nav_share_dir, "map", "map.yaml")              # 静态地图读取接口
     default_nav_rviz = os.path.join(nav_share_dir, "config", "rviz.rviz")
     default_robot_urdf = os.path.join(driver_share, "urdf", "dashgo_visual.urdf")
 
@@ -109,6 +109,7 @@ def generate_launch_description():
     use_global_localize = LaunchConfiguration("use_global_localize")
     use_pointcloud_obstacles = LaunchConfiguration("use_pointcloud_obstacles")
     use_dynamic_obstacle_points = LaunchConfiguration("use_dynamic_obstacle_points")
+    use_slam = LaunchConfiguration("use_slam")
 
     return LaunchDescription(
         [
@@ -148,6 +149,7 @@ def generate_launch_description():
             DeclareLaunchArgument("use_global_localize", default_value="true"),
             DeclareLaunchArgument("use_pointcloud_obstacles", default_value="true"),
             DeclareLaunchArgument("use_dynamic_obstacle_points", default_value="false"),
+            DeclareLaunchArgument("use_slam", default_value="false"),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(robot_launch),
                 condition=IfCondition(start_robot),
@@ -201,12 +203,16 @@ def generate_launch_description():
                     }
                 ],
             ),
-            # ---- 全局定位：静态地图服务器 ----
+            # ---- 全局定位：静态地图服务器 (SLAM模式时跳过) ----
             Node(
                 package="nav_slam",
                 executable="static_map_server",
                 name="static_map_server",
-                condition=IfCondition(start_nav),
+                condition=IfCondition(
+                    PythonExpression([
+                        "'", start_nav, "' == 'true' and '", use_slam, "' == 'false'"
+                    ])
+                ),
                 output="screen",
                 parameters=[{
                     "map_yaml_path": nav_map_yaml,
@@ -214,20 +220,28 @@ def generate_launch_description():
                     "frame_id": "map",
                 }],
             ),
-            # ---- 全局定位：一次性地图转发 ----
+            # ---- 全局定位：一次性地图转发 (SLAM模式时跳过) ----
             Node(
                 package="nav_slam",
                 executable="map_once_relay",
                 name="map_once_relay",
-                condition=IfCondition(start_nav),
+                condition=IfCondition(
+                    PythonExpression([
+                        "'", start_nav, "' == 'true' and '", use_slam, "' == 'false'"
+                    ])
+                ),
                 output="screen",
             ),
-            # ---- 全局定位：激光 ORB 全局定位 ----
+            # ---- 全局定位：激光 ORB 全局定位 (SLAM模式时跳过) ----
             Node(
                 package="nav_slam",
                 executable="lidar_global_localize",
                 name="lidar_global_localize",
-                condition=IfCondition(start_nav),
+                condition=IfCondition(
+                    PythonExpression([
+                        "'", start_nav, "' == 'true' and '", use_slam, "' == 'false'"
+                    ])
+                ),
                 output="screen",
                 parameters=[{
                     "map_yaml_path": nav_map_yaml,
@@ -264,12 +278,16 @@ def generate_launch_description():
                     }
                 ],
             ),
-            # ---- 代价地图发布 ----
+            # ---- 代价地图发布 (SLAM模式时跳过，由slam_controller接管) ----
             Node(
                 package="nav_slam",
                 executable="map_pub",
                 name="map_pub",
-                condition=IfCondition(start_nav),
+                condition=IfCondition(
+                    PythonExpression([
+                        "'", start_nav, "' == 'true' and '", use_slam, "' == 'false'"
+                    ])
+                ),
                 output="screen",
                 parameters=[
                     {
@@ -290,6 +308,14 @@ def generate_launch_description():
                         "use_dynamic_obstacle_points": use_dynamic_obstacle_points,
                     }
                 ],
+            ),
+            # ---- SLAM 在线建图 (use_slam:=true 时启用) ----
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    os.path.join(nav_share_dir, "launch", "slam_mapping.launch.py")
+                ),
+                condition=IfCondition(use_slam),
+                launch_arguments={}.items(),
             ),
             # ---- odom → base_footprint TF 桥接 ----
             Node(
@@ -312,23 +338,27 @@ def generate_launch_description():
                     "output_topic": control_odom_topic,
                 }],
             ),
-            # ---- map→odom fallback 静态 TF (无全局定位时) ----
+            # ---- map→odom fallback 静态 TF (SLAM/全局定位时跳过) ----
             Node(
                 package="nav_slam",
                 executable="odom_map_tf",
                 name="odom_map_tf",
-                condition=IfCondition(start_nav),
+                condition=IfCondition(
+                    PythonExpression([
+                        "'", start_nav, "' == 'true' and '", use_slam, "' == 'false'"
+                    ])
+                ),
                 output="screen",
             ),
-            # ---- 点云坐标系变换 ----
-            Node(
-                package="nav_slam",
-                executable="points_pub_map",
-                name="points_pub_map",
-                condition=IfCondition(start_nav),
-                output="screen",
-                parameters=[{"frame_id": "map"}, {"odom_topic": map_odom_topic}],
-            ),
+            # ---- 点云坐标系变换 (已禁用: laser_scan_to_points 通过TF变换代替，避免坐标系bug) ----
+            # Node(
+            #     package="nav_slam",
+            #     executable="points_pub_map",
+            #     name="points_pub_map",
+            #     condition=IfCondition(start_nav),
+            #     output="screen",
+            #     parameters=[{"frame_id": "map"}, {"odom_topic": map_odom_topic}],
+            # ),
             # ---- 路径跟踪控制器 ----
             Node(
                 package="nav_slam",

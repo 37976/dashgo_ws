@@ -1,0 +1,30 @@
+# D435 RGB-D 录制参数配置
+# 此文件在 ros2 bag record 启动时写入数据集目录
+
+camera_model: "Intel RealSense D435"
+serial_no: ""                          # 空表示自动检测
+
+# 图像参数
+color_width: 640
+color_height: 480
+depth_width: 640
+depth_height: 480
+fps: 30
+
+# 深度参数
+depth_scale: 1000.0                    # 像素值 / depth_scale = 米（D435: 1000）
+depth_unit: "mm"                       # uint16 PNG 中每个单位的物理意义
+align_depth: true                      # 是否对齐深度到彩色帧
+
+# ROS2 话题（与 d435.launch.py 一致）
+color_topic: "/camera/camera/color/image_raw"
+depth_topic: "/camera/camera/aligned_depth_to_color/image_raw"
+camera_info_topic: "/camera/camera/color/camera_info"
+
+# 录制建议
+notes: |
+  1. 移动要慢、平稳，包含平移和转弯
+  2. 尽量最后回到起点形成闭环（有利于 SLAM 回环检测）
+  3. 避免快速旋转和急停
+  4. 场景中应有足够纹理特征（避免纯白墙）
+  5. 录制时长建议 2-5 分钟

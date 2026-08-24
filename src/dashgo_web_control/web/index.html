@@ -43,7 +43,7 @@
             <span id="page-title">导航页面</span>
             <div class="mode-switch">
               <button id="nav-mode-button" class="mode-button active">导航模式</button>
-              <button id="manual-mode-button" class="mode-button">手动模式</button>
+              <button id="mapping-mode-button" class="mode-button">建图模式</button>
             </div>
           </div>
 
@@ -83,32 +83,42 @@
             </p>
           </section>
 
-          <section id="manual-page" class="mode-page">
-            <div class="manual-layout">
-              <div class="camera-card">
-                <div class="camera-title">
-                  <span>前视画面</span>
-                  <span id="camera-status" class="camera-status">等待相机</span>
-                </div>
-                <img id="camera-frame" class="camera-frame" alt="D435 camera stream">
+          <section id="mapping-page" class="mode-page">
+            <!-- 建图工具栏 -->
+            <div class="mapping-toolbar">
+              <button id="start-mapping-button" class="primary-button">开始建图</button>
+              <button id="save-map-button" class="primary-button" disabled>保存地图</button>
+              <input id="map-filename-input" type="text" placeholder="地图名称" value="my_map">
+              <span id="mapping-status-badge" class="mapping-badge">空闲</span>
+            </div>
+
+            <div class="mapping-layout">
+              <!-- 地图 Canvas -->
+              <div class="map-workspace">
+                <canvas id="map-canvas-mapping" width="900" height="900"></canvas>
               </div>
 
-              <div class="manual-control-card">
+              <!-- 右侧：状态 + 摇杆 -->
+              <div class="mapping-control-card">
+                <div class="stats-grid mapping-stats">
+                  <div class="stat-card stat-card-inline">
+                    <label>机器人位置</label>
+                    <strong id="mapping-pose-text">--</strong>
+                  </div>
+                  <div class="stat-card stat-card-inline">
+                    <label>地图尺寸</label>
+                    <strong id="mapping-map-size-text">--</strong>
+                  </div>
+                  <div class="stat-card stat-card-inline">
+                    <label>建图状态</label>
+                    <strong id="mapping-status-text">空闲</strong>
+                  </div>
+                </div>
                 <div class="joystick-card">
                   <div id="joystick-base" class="joystick-base">
                     <div id="joystick-knob" class="joystick-knob"></div>
                   </div>
                   <p class="hint">按住摇杆拖动控制底盘，松手自动停车。</p>
-                </div>
-                <div class="stats-grid manual-stats">
-                  <div class="stat-card stat-card-inline">
-                    <label>机器人位置</label>
-                    <strong id="manual-pose-text">--</strong>
-                  </div>
-                  <div class="stat-card stat-card-inline">
-                    <label>当前速度</label>
-                    <strong id="manual-velocity-text">--</strong>
-                  </div>
                 </div>
               </div>
             </div>

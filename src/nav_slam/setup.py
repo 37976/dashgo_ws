@@ -38,6 +38,7 @@ setup(
             'laser_scan_to_points = nav_slam.laser_scan_to_points:main',
             'odom_tf_bridge = nav_slam.odom_tf_bridge:main',
             'pose_logger = nav_slam.pose_logger:main',
+            'slam_controller = nav_slam.slam_controller:main',
         ],
     },
 )

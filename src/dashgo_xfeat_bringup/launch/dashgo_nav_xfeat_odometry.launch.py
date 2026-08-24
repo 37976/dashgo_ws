@@ -52,6 +52,7 @@ def generate_launch_description():
     correction_gain_yaw = LaunchConfiguration("correction_gain_yaw")
     max_delta_translation_diff_m = LaunchConfiguration("max_delta_translation_diff_m")
     max_delta_yaw_diff_deg = LaunchConfiguration("max_delta_yaw_diff_deg")
+    use_slam = LaunchConfiguration("use_slam")
 
     return LaunchDescription([
         DeclareLaunchArgument("start_robot", default_value="true"),
@@ -83,6 +84,7 @@ def generate_launch_description():
         DeclareLaunchArgument("correction_gain_yaw", default_value="0.10"),
         DeclareLaunchArgument("max_delta_translation_diff_m", default_value="0.20"),
         DeclareLaunchArgument("max_delta_yaw_diff_deg", default_value="20.0"),
+        DeclareLaunchArgument("use_slam", default_value="false"),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(robot_launch),
             launch_arguments={
@@ -157,6 +159,7 @@ def generate_launch_description():
                         "publish_robot_model": "true",
                         "map_odom_topic": fused_odom_topic,
                         "control_odom_topic": "/odom_in_map",
+                        "use_slam": use_slam,
                     }.items(),
                 ),
             ],
