@@ -159,7 +159,7 @@ def generate_launch_description():
             DeclareLaunchArgument("use_dynamic_obstacle_points", default_value="false"),
             DeclareLaunchArgument("use_slam", default_value="false"),
             DeclareLaunchArgument("use_continuous_orb", default_value="true"),
-            DeclareLaunchArgument("goal_relocalization_enabled", default_value="true"),
+            DeclareLaunchArgument("goal_relocalization_enabled", default_value="false"),
             DeclareLaunchArgument("orb_match_period_sec", default_value="2.0"),
             DeclareLaunchArgument("orb_max_iterations", default_value="50"),
             DeclareLaunchArgument("orb_min_f1_score", default_value="35.0"),
@@ -477,6 +477,7 @@ def generate_launch_description():
                     {
                         "host": web_host,
                         "port": web_port,
+                        "odom_topic": control_odom_topic,
                         "image_topic": web_image_topic,
                         "map_publish_hz": web_map_publish_hz,
                         "camera_publish_hz": web_camera_publish_hz,

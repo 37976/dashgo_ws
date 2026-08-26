@@ -38,6 +38,13 @@ def _wrap_angle(angle: float) -> float:
     return angle
 
 
+def _imu_delta_is_consistent(
+    imu_delta: float, base_delta: float, max_difference: float
+) -> bool:
+    return max_difference <= 0.0 or abs(
+        _wrap_angle(imu_delta - base_delta)) <= max_difference
+
+
 def _stamp_sec(msg: Odometry) -> float:
     return float(msg.header.stamp.sec) + float(msg.header.stamp.nanosec) * 1e-9
 
@@ -54,6 +61,7 @@ class OdomFusionNode(Node):
         self.declare_parameter("imu_topic", "/imu/data")
         self.declare_parameter("use_imu_yaw", True)
         self.declare_parameter("imu_timeout_sec", 0.5)
+        self.declare_parameter("max_imu_yaw_difference_deg", 5.0)
         self.declare_parameter("log_period_sec", 0.5)
         self.declare_parameter("max_delta_translation_diff_m", 0.20)
         self.declare_parameter("max_delta_yaw_diff_deg", 20.0)
@@ -75,6 +83,8 @@ class OdomFusionNode(Node):
         self.imu_topic = str(self.get_parameter("imu_topic").value)
         self.use_imu_yaw = bool(self.get_parameter("use_imu_yaw").value)
         self.imu_timeout_sec = float(self.get_parameter("imu_timeout_sec").value)
+        self.max_imu_yaw_difference_rad = math.radians(float(
+            self.get_parameter("max_imu_yaw_difference_deg").value))
         self.log_period_sec = max(0.1, float(self.get_parameter("log_period_sec").value))
         self.max_delta_translation_diff_m = float(self.get_parameter("max_delta_translation_diff_m").value)
         self.max_delta_yaw_diff_rad = math.radians(float(self.get_parameter("max_delta_yaw_diff_deg").value))
@@ -92,6 +102,8 @@ class OdomFusionNode(Node):
         self.last_xfeat_stamp_sec: Optional[float] = None
         self.latest_imu: Optional[Imu] = None
         self.last_imu_stamp_sec: Optional[float] = None
+        self.last_used_imu_yaw: Optional[float] = None
+        self.last_used_imu_stamp_sec: Optional[float] = None
         self.last_log_sec: Optional[float] = None
         self.prev_base_odom: Optional[Odometry] = None
         self.fused_x: Optional[float] = None
@@ -339,17 +351,41 @@ class OdomFusionNode(Node):
         if self.use_imu_yaw and self.latest_imu is not None and self.last_imu_stamp_sec is not None:
             base_stamp_sec = float(base_msg.header.stamp.sec) + float(base_msg.header.stamp.nanosec) * 1e-9
             if base_stamp_sec - self.last_imu_stamp_sec <= self.imu_timeout_sec:
-                prev_stamp_sec = float(self.prev_base_odom.header.stamp.sec) + float(self.prev_base_odom.header.stamp.nanosec) * 1e-9
-                dt = base_stamp_sec - prev_stamp_sec
-                if dt > 0:
-                    imu_dyaw = float(self.latest_imu.angular_velocity.z) * dt
-                    corrected_dyaw = imu_dyaw
-                    self._last_fusion_status = "imu"
-                    self._last_status_details = (
-                        f"imu_dyaw={math.degrees(imu_dyaw):.1f}deg "
-                        f"base_dyaw={math.degrees(base_delta_yaw):.1f}deg "
-                        f"dt={dt:.3f}s angz={self.latest_imu.angular_velocity.z:.3f}"
-                    )
+                imu_yaw = _yaw_from_quaternion(self.latest_imu.orientation)
+                has_new_imu = (
+                    self.last_used_imu_stamp_sec is None
+                    or self.last_imu_stamp_sec > self.last_used_imu_stamp_sec)
+                imu_gap_sec = (
+                    0.0 if self.last_used_imu_stamp_sec is None
+                    else self.last_imu_stamp_sec - self.last_used_imu_stamp_sec)
+                if self.last_used_imu_yaw is None or imu_gap_sec > self.imu_timeout_sec:
+                    self.last_used_imu_yaw = imu_yaw
+                    self.last_used_imu_stamp_sec = self.last_imu_stamp_sec
+                    self._last_status_details = "imu_baseline_initialized"
+                elif has_new_imu:
+                    imu_dyaw = _wrap_angle(imu_yaw - self.last_used_imu_yaw)
+                    self.last_used_imu_yaw = imu_yaw
+                    self.last_used_imu_stamp_sec = self.last_imu_stamp_sec
+                    if _imu_delta_is_consistent(
+                        imu_dyaw, base_delta_yaw,
+                        self.max_imu_yaw_difference_rad):
+                        corrected_dyaw = imu_dyaw
+                        self._last_fusion_status = "imu"
+                        self._last_status_details = (
+                            f"imu_dyaw={math.degrees(imu_dyaw):.1f}deg "
+                            f"base_dyaw={math.degrees(base_delta_yaw):.1f}deg"
+                        )
+                    else:
+                        self._last_fusion_status = "imu_rejected"
+                        self._last_status_details = (
+                            f"imu_dyaw={math.degrees(imu_dyaw):.1f}deg "
+                            f"base_dyaw={math.degrees(base_delta_yaw):.1f}deg "
+                            f"diff={math.degrees(abs(_wrap_angle(imu_dyaw - base_delta_yaw))):.1f}deg"
+                        )
+                        self.get_logger().warn(
+                            f"IMU 航向增量异常，回退轮式里程计: {self._last_status_details}",
+                            throttle_duration_sec=1.0,
+                        )
 
         if self.xfeat_delta is not None and self.last_xfeat_stamp_sec is not None:
             base_stamp_sec = float(base_msg.header.stamp.sec) + float(base_msg.header.stamp.nanosec) * 1e-9

@@ -29,12 +29,14 @@ class LaserScanToPoints(Node):
         self.declare_parameter("max_range", 100.0)
         self.declare_parameter("target_frame", "map")
         self.declare_parameter("tf_timeout_sec", 0.5)
+        self.declare_parameter("deskew_scan", True)
 
         scan_topic = str(self.get_parameter("scan_topic").value)
         output_topic = str(self.get_parameter("output_topic").value)
         self._min_range = float(self.get_parameter("min_range").value)
         self._max_range = float(self.get_parameter("max_range").value)
         self._target_frame = str(self.get_parameter("target_frame").value)
+        self._deskew_scan = bool(self.get_parameter("deskew_scan").value)
         tf_timeout_sec = float(self.get_parameter("tf_timeout_sec").value)
         self._tf_timeout = rclpy.duration.Duration(seconds=tf_timeout_sec)
 
@@ -63,12 +65,21 @@ class LaserScanToPoints(Node):
 
         try:
             scan_time = rclpy.time.Time.from_msg(msg.header.stamp)
-            transform = self._tf_buffer.lookup_transform(
+            start_transform = self._tf_buffer.lookup_transform(
                 self._target_frame,
                 source_frame,
                 scan_time,
                 self._tf_timeout,
             )
+            end_transform = None
+            scan_duration = max(0.0, float(msg.time_increment) * (n - 1))
+            if self._deskew_scan and scan_duration > 0.0:
+                end_transform = self._tf_buffer.lookup_transform(
+                    self._target_frame,
+                    source_frame,
+                    scan_time + rclpy.duration.Duration(seconds=scan_duration),
+                    self._tf_timeout,
+                )
         except TransformException as e:
             self._fail_count += 1
             if self._fail_count % 50 == 1:
@@ -84,15 +95,32 @@ class LaserScanToPoints(Node):
                 f"TF 链路已打通 ({source_frame}→{self._target_frame})，开始转发点云"
             )
 
-        tx = transform.transform.translation.x
-        ty = transform.transform.translation.y
-        tz = transform.transform.translation.z
-        qx = transform.transform.rotation.x
-        qy = transform.transform.rotation.y
-        qz = transform.transform.rotation.z
-        qw = transform.transform.rotation.w
-
-        rot = _quat_to_rot(qx, qy, qz, qw)
+        start_translation = (
+            start_transform.transform.translation.x,
+            start_transform.transform.translation.y,
+            start_transform.transform.translation.z,
+        )
+        start_quaternion = (
+            start_transform.transform.rotation.x,
+            start_transform.transform.rotation.y,
+            start_transform.transform.rotation.z,
+            start_transform.transform.rotation.w,
+        )
+        if end_transform is not None:
+            end_translation = (
+                end_transform.transform.translation.x,
+                end_transform.transform.translation.y,
+                end_transform.transform.translation.z,
+            )
+            end_quaternion = (
+                end_transform.transform.rotation.x,
+                end_transform.transform.rotation.y,
+                end_transform.transform.rotation.z,
+                end_transform.transform.rotation.w,
+            )
+        else:
+            end_translation = start_translation
+            end_quaternion = start_quaternion
 
         points = []
         angle = msg.angle_min
@@ -107,6 +135,17 @@ class LaserScanToPoints(Node):
 
             px = r * math.cos(angle)
             py = r * math.sin(angle)
+
+            fraction = i / (n - 1) if end_transform is not None and n > 1 else 0.0
+            tx = start_translation[0] + fraction * (
+                end_translation[0] - start_translation[0])
+            ty = start_translation[1] + fraction * (
+                end_translation[1] - start_translation[1])
+            tz = start_translation[2] + fraction * (
+                end_translation[2] - start_translation[2])
+            qx, qy, qz, qw = _interpolate_quaternion(
+                start_quaternion, end_quaternion, fraction)
+            rot = _quat_to_rot(qx, qy, qz, qw)
 
             mx = rot[0] * px + rot[1] * py + tx
             my = rot[3] * px + rot[4] * py + ty
@@ -139,6 +178,21 @@ def _quat_to_rot(qx, qy, qz, qw):
         2 * (qy * qz + qw * qx),
         1 - 2 * (qx * qx + qy * qy),
     )
+
+
+def _interpolate_quaternion(start, end, fraction):
+    """Normalized shortest-path interpolation for one scan interval."""
+    dot = sum(a * b for a, b in zip(start, end))
+    if dot < 0.0:
+        end = tuple(-value for value in end)
+    quaternion = tuple(
+        (1.0 - fraction) * a + fraction * b
+        for a, b in zip(start, end)
+    )
+    norm = math.sqrt(sum(value * value for value in quaternion))
+    if norm <= 1e-12:
+        return start
+    return tuple(value / norm for value in quaternion)
 
 
 def main(args=None):

@@ -353,6 +353,8 @@ class BaseController:
         self.tf_broadcaster = TransformBroadcaster(node)
         self.left_encoder_pub = node.create_publisher(Int16, "Lencoder", 10)
         self.right_encoder_pub = node.create_publisher(Int16, "Rencoder", 10)
+        self.left_pidin_pub = node.create_publisher(Int16, "Lpidin", 10)
+        self.right_pidin_pub = node.create_publisher(Int16, "Rpidin", 10)
         self.left_pidout_pub = node.create_publisher(Int16, "Lpidout", 10)
         self.right_pidout_pub = node.create_publisher(Int16, "Rpidout", 10)
         self.left_vel_pub = node.create_publisher(Int16, "Lvel", 10)
@@ -391,14 +393,16 @@ class BaseController:
 
         try:
             left_pidin, right_pidin = self.arduino.get_pidin()
-            self.left_encoder_pub.publish(Int16(data=int(left_pidin)))
-            self.right_encoder_pub.publish(Int16(data=int(right_pidin)))
+            self.left_pidin_pub.publish(Int16(data=int(left_pidin)))
+            self.right_pidin_pub.publish(Int16(data=int(right_pidin)))
 
             left_pidout, right_pidout = self.arduino.get_pidout()
             self.left_pidout_pub.publish(Int16(data=int(left_pidout)))
             self.right_pidout_pub.publish(Int16(data=int(right_pidout)))
 
             left_enc, right_enc = self.arduino.get_encoder_counts()
+            self.left_encoder_pub.publish(Int16(data=int(left_enc)))
+            self.right_encoder_pub.publish(Int16(data=int(right_enc)))
         except Exception as exc:
             self.bad_encoder_count += 1
             self.node.get_logger().error(
