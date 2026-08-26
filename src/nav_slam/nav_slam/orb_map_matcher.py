@@ -1,0 +1,349 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+orb_map_matcher.py -- 持续 ORB 扫描-地图匹配, 周期性纠正里程计漂移。
+
+将当前激光扫描渲染为图像, 与地图的局部区域进行 ORB 特征匹配,
+获得机器人在 map 帧下的绝对位姿，并按激光扫描时间戳发布。
+"""
+
+import math
+import os
+import sys
+import json
+import time
+from collections import deque
+from typing import Deque, Optional
+
+import cv2
+import numpy as np
+import rclpy
+import yaml
+from geometry_msgs.msg import Quaternion
+from nav_msgs.msg import Odometry
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import LaserScan
+from std_msgs.msg import String
+from std_srvs.srv import SetBool
+
+# ---- 复用 kidnapped_robot_finder ----
+_base = os.path.dirname(os.path.abspath(__file__))
+for _ in range(6):
+    _base = os.path.dirname(_base)
+_krf_path = os.path.join(_base, "src", "kidnapped_robot_finder")
+if os.path.isdir(_krf_path) and _krf_path not in sys.path:
+    sys.path.insert(0, _krf_path)
+from global_localizer import kidnap_solver
+
+
+def _yaw_from_quaternion(q: Quaternion) -> float:
+    siny = 2.0 * (q.w * q.z + q.x * q.y)
+    cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+    return math.atan2(siny, cosy)
+
+
+def _quaternion_from_yaw(yaw: float) -> Quaternion:
+    q = Quaternion()
+    q.z = math.sin(yaw * 0.5)
+    q.w = math.cos(yaw * 0.5)
+    return q
+
+
+def _wrap_angle(angle: float) -> float:
+    return math.atan2(math.sin(angle), math.cos(angle))
+
+
+def _stamp_sec(header) -> float:
+    return float(header.stamp.sec) + float(header.stamp.nanosec) * 1e-9
+
+
+class OrbMapMatcher(Node):
+    def __init__(self) -> None:
+        super().__init__("orb_map_matcher")
+
+        self.declare_parameter("map_yaml_path", "")
+        self.declare_parameter("scan_topic", "/scan")
+        self.declare_parameter("odom_topic", "/odom_in_map")
+        self.declare_parameter("match_pose_topic", "/orb/match_pose")
+        self.declare_parameter("base_frame", "base_footprint")
+        self.declare_parameter("match_period_sec", 2.0)
+        self.declare_parameter("lidar_max_range", 8.0)
+        self.declare_parameter("map_resolution", 0.05)
+        self.declare_parameter("max_iterations", 50)
+        self.declare_parameter("min_f1_score", 50.0)
+        self.declare_parameter("local_search_radius_m", 1.0)
+        self.declare_parameter("match_timeout_sec", 5.0)
+        self.declare_parameter("match_event_topic", "/orb/match_event")
+        self.declare_parameter("odom_history_sec", 10.0)
+        self.declare_parameter("max_scan_odom_sync_sec", 0.15)
+
+        map_yaml = str(self.get_parameter("map_yaml_path").value)
+        if not map_yaml:
+            self.get_logger().fatal("map_yaml_path 必须提供")
+            raise RuntimeError("缺少 map_yaml_path")
+
+        self._scan_topic = str(self.get_parameter("scan_topic").value)
+        self._odom_topic = str(self.get_parameter("odom_topic").value)
+        self._match_pose_topic = str(self.get_parameter("match_pose_topic").value)
+        self._base_frame = str(self.get_parameter("base_frame").value)
+        self._period = float(self.get_parameter("match_period_sec").value)
+        self._max_range = float(self.get_parameter("lidar_max_range").value)
+        self._map_resolution = float(self.get_parameter("map_resolution").value)
+        self._max_iter = int(self.get_parameter("max_iterations").value)
+        self._min_f1 = float(self.get_parameter("min_f1_score").value)
+        self._local_search_radius_m = float(
+            self.get_parameter("local_search_radius_m").value)
+        self._match_timeout_sec = float(self.get_parameter("match_timeout_sec").value)
+        self._match_event_topic = str(self.get_parameter("match_event_topic").value)
+        self._odom_history_sec = float(self.get_parameter("odom_history_sec").value)
+        self._max_scan_odom_sync_sec = float(
+            self.get_parameter("max_scan_odom_sync_sec").value)
+
+        # ---- 加载地图 ----
+        self._map_image, self._map_origin, self._map_pose_offset = self._load_map(map_yaml)
+        self._image_size = int(2.0 * self._max_range / self._map_resolution)
+        self._origin_offset = int(self._max_range / self._map_resolution)
+
+        # ---- 状态 ----
+        self._latest_scan: Optional[LaserScan] = None
+        self._latest_odom: Optional[Odometry] = None
+        self._odom_history: Deque[tuple[float, Odometry]] = deque()
+        self._match_count = 0
+        self._success_count = 0
+        self._enabled = True
+
+        # ---- 订阅 ----
+        self._scan_sub = self.create_subscription(
+            LaserScan, self._scan_topic, self._scan_cb, qos_profile_sensor_data)
+        self._odom_sub = self.create_subscription(
+            Odometry, self._odom_topic, self._odom_cb, 10)
+
+        # ---- 发布 ----
+        self._match_pose_pub = self.create_publisher(
+            Odometry, self._match_pose_topic, 10)
+        self._event_pub = self.create_publisher(String, self._match_event_topic, 10)
+
+        # ---- 定时匹配 ----
+        self._timer = self.create_timer(self._period, self._match_timer_cb)
+
+        # ---- 暂停/恢复服务 (重定位期间暂停，避免新旧TF冲突) ----
+        self._enable_srv = self.create_service(
+            SetBool, "/enable_orb_matcher", self._enable_cb)
+
+        self.get_logger().info(
+            f"ORB 持续匹配就绪: 每 {self._period}s, "
+            f"max_iter={self._max_iter}, min_f1={self._min_f1}, "
+            f"local_radius={self._local_search_radius_m:.2f}m, "
+            f"output={self._match_pose_topic}"
+        )
+
+    # ==================== 地图 ====================
+
+    @staticmethod
+    def _pgm_from_yaml(yaml_path: str) -> str:
+        yaml_dir = os.path.dirname(os.path.abspath(yaml_path))
+        with open(yaml_path, "r", encoding="utf-8") as f:
+            meta = yaml.safe_load(f)
+        pgm_rel = meta.get("image", "")
+        return os.path.join(yaml_dir, pgm_rel) if pgm_rel else ""
+
+    def _load_map(
+        self, map_yaml: str
+    ) -> tuple[np.ndarray, tuple[float, float], tuple[float, float]]:
+        pgm_path = self._pgm_from_yaml(map_yaml)
+        if not os.path.exists(pgm_path):
+            raise FileNotFoundError(f"地图不存在: {pgm_path}")
+        map_img = cv2.imread(pgm_path, cv2.IMREAD_GRAYSCALE)
+        if map_img is None:
+            raise RuntimeError(f"无法读取地图: {pgm_path}")
+
+        with open(map_yaml, "r", encoding="utf-8") as f:
+            meta = yaml.safe_load(f)
+        origin = (float(meta["origin"][0]), float(meta["origin"][1]))
+        pose_offset = tuple(float(value) for value in meta.get(
+            "localization_pose_offset", [0.0, 0.0]))
+        self.get_logger().info(
+            f"地图加载: {map_img.shape[1]}×{map_img.shape[0]}, "
+            f"origin={origin}, resolution={self._map_resolution}, "
+            f"pose_offset={pose_offset}"
+        )
+        return map_img, origin, pose_offset
+
+    # ==================== 回调 ====================
+
+    def _scan_cb(self, msg: LaserScan) -> None:
+        self._latest_scan = msg
+
+    def _odom_cb(self, msg: Odometry) -> None:
+        self._latest_odom = msg
+        stamp_sec = _stamp_sec(msg.header)
+        self._odom_history.append((stamp_sec, msg))
+        oldest_stamp = stamp_sec - self._odom_history_sec
+        while self._odom_history and self._odom_history[0][0] < oldest_stamp:
+            self._odom_history.popleft()
+
+    def _odom_at_stamp(self, stamp_sec: float) -> Optional[Odometry]:
+        if not self._odom_history:
+            return None
+        odom_stamp, odom = min(
+            self._odom_history, key=lambda item: abs(item[0] - stamp_sec))
+        if abs(odom_stamp - stamp_sec) > self._max_scan_odom_sync_sec:
+            return None
+        return odom
+
+    # ==================== 暂停/恢复 ====================
+
+    def _enable_cb(self, request, response):
+        self._enabled = request.data
+        response.success = True
+        response.message = (
+            f"ORB matcher {'已恢复' if self._enabled else '已暂停'}")
+        self.get_logger().info(response.message)
+        return response
+
+    # ==================== 定时匹配 ====================
+
+    def _match_timer_cb(self) -> None:
+        if not self._enabled:
+            return
+        if self._latest_scan is None or self._latest_odom is None:
+            return
+
+        self._match_count += 1
+        scan = self._latest_scan
+        scan_stamp_sec = _stamp_sec(scan.header)
+        scan_odom = self._odom_at_stamp(scan_stamp_sec)
+        if scan_odom is None:
+            self._publish_match_event("unsynchronized_odom", 0.0)
+            self.get_logger().warn(
+                "未找到与激光扫描时间对齐的里程计，跳过本次 ORB 匹配",
+                throttle_duration_sec=2.0,
+            )
+            return
+
+        # 1. 渲染扫描图像
+        scan_img, min_dist = self._render_scan(scan)
+
+        # 2. 使用完整地图模拟扫描，但候选位置只取当前 map 位姿附近。
+        start_time = time.perf_counter()
+        try:
+            result = kidnap_solver.solve_kidnap(
+                scan_img, self._map_image, min_dist,
+                map_resolution=self._map_resolution,
+                map_origin=self._map_origin,
+                map_pose_offset=self._map_pose_offset,
+                max_iterations=self._max_iter,
+                # Leave one iteration of margin for returning and publishing the result.
+                max_time_budget_ms=max(
+                    100, int(self._match_timeout_sec * 1000.0) - 500),
+                stop_search_threshold=self._min_f1,
+                lidar_range=self._max_range,
+                search_center_world=(
+                    scan_odom.pose.pose.position.x,
+                    scan_odom.pose.pose.position.y,
+                ),
+                search_radius_m=self._local_search_radius_m,
+            )
+        except Exception as exc:
+            self._publish_match_event("error", (time.perf_counter() - start_time) * 1000.0)
+            self.get_logger().warn(f"ORB 匹配异常: {exc}")
+            return
+        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+
+        if elapsed_ms > self._match_timeout_sec * 1000.0:
+            self._publish_match_event("timeout", elapsed_ms)
+            self.get_logger().warn(
+                f"[{self._match_count}] 匹配超时 {elapsed_ms:.0f}ms，丢弃迟到观测")
+            return
+
+        if result is None:
+            self._publish_match_event("no_candidate", elapsed_ms)
+            self.get_logger().info(
+                f"[{self._match_count}] 匹配失败 (无候选)",
+                throttle_duration_sec=2.0,
+            )
+            return
+
+        map_x, map_y, map_yaw, f1 = result
+        # solve_kidnap 的航向以扫描图像坐标定义。一次性全局定位已使用
+        # 同一转换；持续定位必须保持一致，否则 map->odom 会相差 180°。
+        map_yaw = _wrap_angle(map_yaw + math.pi)
+        if f1 < self._min_f1:
+            self._publish_match_event("low_f1", elapsed_ms, f1)
+            self.get_logger().info(
+                f"[{self._match_count}] 匹配置信度不足: F1={f1:.1f} < {self._min_f1:.1f}")
+            return
+
+        self._success_count += 1
+        self._publish_match_pose(scan.header, map_x, map_y, map_yaw)
+        self._publish_match_event("matched", elapsed_ms, f1)
+
+        self.get_logger().info(
+            f"[{self._match_count}] 匹配成功: F1={f1:.1f}% "
+            f"map=({map_x:.2f},{map_y:.2f},{math.degrees(map_yaw):.1f}°) "
+            f"成功率={self._success_count}/{self._match_count}"
+        )
+
+    # ==================== 扫描渲染 ====================
+
+    def _render_scan(self, msg: LaserScan) -> tuple[np.ndarray, float]:
+        """将 LaserScan 渲染为 320×320 灰度图像, 返回 (image, min_distance_m)."""
+        image = np.zeros((self._image_size, self._image_size), dtype=np.uint8)
+        min_dist = math.inf
+        for i, r in enumerate(msg.ranges):
+            if not (0.25 < r < self._max_range):
+                continue
+            angle = msg.angle_min + i * msg.angle_increment
+            x = r * math.cos(angle)
+            y = r * math.sin(angle)
+            px = int(x / self._map_resolution + self._origin_offset)
+            py = int(y / self._map_resolution + self._origin_offset)
+            if 0 <= px < self._image_size and 0 <= py < self._image_size:
+                min_dist = min(min_dist, r)
+                cv2.circle(image, (px, py), radius=1, color=255, thickness=-1)
+        return image, float(min_dist)
+
+    # ==================== 发布 ====================
+
+    def _publish_match_pose(self, header, x: float, y: float, yaw: float) -> None:
+        odom = Odometry()
+        odom.header = header
+        odom.header.frame_id = "map"
+        odom.child_frame_id = self._base_frame
+        odom.pose.pose.position.x = x
+        odom.pose.pose.position.y = y
+        odom.pose.pose.position.z = 0.0
+        odom.pose.pose.orientation = _quaternion_from_yaw(yaw)
+        self._match_pose_pub.publish(odom)
+
+    def _publish_match_event(self, status: str, elapsed_ms: float, f1: float = 0.0) -> None:
+        """Publish a structured ORB-attempt event for the experiment logger."""
+        stamp_sec = self.get_clock().now().nanoseconds * 1e-9
+        event = {
+            "stamp_sec": stamp_sec,
+            "attempt": self._match_count,
+            "status": status,
+            "elapsed_ms": elapsed_ms,
+            "f1": f1,
+            "timed_out": elapsed_ms > self._match_timeout_sec * 1000.0,
+        }
+        message = String()
+        message.data = json.dumps(event, ensure_ascii=False)
+        self._event_pub.publish(message)
+
+
+def main(args=None) -> None:
+    rclpy.init(args=args)
+    node = OrbMapMatcher()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()

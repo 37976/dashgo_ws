@@ -24,18 +24,18 @@ class ObstacleGridNode(Node):
         self.declare_parameter('resolution', 0.1)
         self.declare_parameter('min_height', 0.1)
         self.declare_parameter('max_height', 1.0)
-        self.declare_parameter('obstacle_radius', 0.08)
-        self.declare_parameter('clear_radius', 0.2)
-        self.declare_parameter('projection_gap_fill_cells', 2)
-        self.declare_parameter('dynamic_obstacle_timeout', 0.6)
+        self.declare_parameter('obstacle_radius', 0.05)
+        self.declare_parameter('clear_radius', 0.14)
+        self.declare_parameter('projection_gap_fill_cells', 0)
+        self.declare_parameter('dynamic_obstacle_timeout', 0.2)
         self.declare_parameter('accumulate_pointcloud_obstacles', False)
         self.declare_parameter('use_pointcloud_obstacles', True)
         self.declare_parameter('use_dynamic_obstacle_points', True)
-        self.declare_parameter('odom_topic', '/odom')
 
         # 新增：静态地图参数
         self.declare_parameter('use_static_map', True)
-        self.declare_parameter('static_map_yaml', os.path.join(get_package_share_directory('nav_slam'), 'map', 'gpt.yaml'))
+        self.declare_parameter('odom_topic', '/odom')
+        self.declare_parameter('static_map_yaml', os.path.join(get_package_share_directory('nav_slam'), 'map', 'map.yaml'))
 
         self.grid_width = self.get_parameter('grid_width').get_parameter_value().double_value
         self.grid_height = self.get_parameter('grid_height').get_parameter_value().double_value
@@ -54,7 +54,6 @@ class ObstacleGridNode(Node):
             'use_pointcloud_obstacles').get_parameter_value().bool_value
         self.use_dynamic_obstacle_points = self.get_parameter(
             'use_dynamic_obstacle_points').get_parameter_value().bool_value
-        self.odom_topic = self.get_parameter('odom_topic').get_parameter_value().string_value
 
         self.use_static_map = self.get_parameter('use_static_map').get_parameter_value().bool_value
         self.static_map_yaml = self.get_parameter('static_map_yaml').get_parameter_value().string_value
@@ -83,17 +82,18 @@ class ObstacleGridNode(Node):
         if self.use_static_map:
             self.load_static_map(self.static_map_yaml)
 
-        # 创建订阅者和发布者
         fast_map_qos = QoSProfile(depth=1)
 
+        # 创建订阅者和发布者
         self.pointcloud_sub = self.create_subscription(
             PointCloud2, '/mapokk', self.pointcloud_callback, fast_map_qos
         )
         self.dynamic_obstacle_sub = self.create_subscription(
             PointCloud2, '/dynamic_obstacle_points', self.dynamic_obstacle_callback, fast_map_qos
         )
+        odom_topic = self.get_parameter('odom_topic').get_parameter_value().string_value
         self.odom_sub = self.create_subscription(
-            Odometry, self.odom_topic, self.odom_callback, 10
+            Odometry, odom_topic, self.odom_callback, 10
         )
         self.grid_combined_pub = self.create_publisher(
             OccupancyGrid, '/combined_grid', fast_map_qos
@@ -112,7 +112,7 @@ class ObstacleGridNode(Node):
         self.dynamic_dilated_obstacles_layer3 = set()
 
         # 定时发布，保证即使没有点云也能看到静态地图
-        self.timer = self.create_timer(0.5, self.timer_callback)
+        self.timer = self.create_timer(0.1, self.timer_callback)
 
         self.get_logger().info('ObstacleGridNode started.')
         if self.use_static_map:
@@ -123,7 +123,6 @@ class ObstacleGridNode(Node):
             f'dynamic_points={self.use_dynamic_obstacle_points}'
         )
         self.get_logger().info(f'Robot footprint clear radius: {self.clear_radius:.2f} m')
-        self.get_logger().info(f'Using odom topic: {self.odom_topic}')
 
     def timer_callback(self):
         changed = False
@@ -292,7 +291,7 @@ class ObstacleGridNode(Node):
             self._pc_msg_count = 0
         self._pc_msg_count += 1
         if self._pc_msg_count % 50 == 1:
-            self.get_logger().info(
+            self.get_logger().debug(
                 f"收到点云障碍物数据: {len(points)} 个点 (第 {self._pc_msg_count} 条消息)"
             )
 

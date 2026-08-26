@@ -4,6 +4,7 @@
 import math
 import rclpy
 from nav_msgs.msg import Odometry
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from tf2_ros import Buffer, TransformException, TransformListener
 
@@ -21,10 +22,13 @@ class OdomToMapRelay(Node):
         self.declare_parameter("output_topic", "/odom_in_map")
         self.declare_parameter("odom_frame", "odom")
         self.declare_parameter("map_frame", "map")
+        self.declare_parameter("tf_timeout_sec", 0.2)
         odom_topic = str(self.get_parameter("odom_topic").value)
         output_topic = str(self.get_parameter("output_topic").value)
         self._odom_frame = str(self.get_parameter("odom_frame").value)
         self._map_frame = str(self.get_parameter("map_frame").value)
+        self._tf_timeout = rclpy.duration.Duration(
+            seconds=float(self.get_parameter("tf_timeout_sec").value))
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
@@ -38,8 +42,9 @@ class OdomToMapRelay(Node):
 
     def _odom_cb(self, msg: Odometry):
         try:
+            odom_time = rclpy.time.Time.from_msg(msg.header.stamp)
             tf = self._tf_buffer.lookup_transform(
-                self._map_frame, self._odom_frame, rclpy.time.Time())
+                self._map_frame, self._odom_frame, odom_time, self._tf_timeout)
         except TransformException:
             return
 
@@ -70,11 +75,14 @@ class OdomToMapRelay(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = OdomToMapRelay()
+    executor = MultiThreadedExecutor(num_threads=2)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
+        executor.shutdown()
         node.destroy_node()
         rclpy.shutdown()
 

@@ -65,6 +65,7 @@ def generate_launch_description():
     laser_z = LaunchConfiguration("laser_z")
     d435_serial_no = LaunchConfiguration("d435_serial_no")
     t265_serial_no = LaunchConfiguration("t265_serial_no")
+    publish_odom_tf = LaunchConfiguration("publish_odom_tf")
 
     return LaunchDescription(
         [
@@ -148,6 +149,11 @@ def generate_launch_description():
                 default_value="",
                 description="Optional serial number for the T265 camera.",
             ),
+            DeclareLaunchArgument(
+                "publish_odom_tf",
+                default_value="true",
+                description="Let the base driver publish odom to base TF.",
+            ),
             Node(
                 package="dashgo_driver_ros2",
                 executable="dashgo_driver_node",
@@ -159,6 +165,7 @@ def generate_launch_description():
                         "port": driver_port,
                         "baud": driver_baud,
                         "base_frame": base_frame,
+                        "publish_odom_tf": publish_odom_tf,
                     },
                 ],
             ),

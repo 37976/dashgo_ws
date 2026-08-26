@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-lidar_global_localize.py -- ORB 匹配一次性全局定位, 锁定 map->odom 静态 TF.
+lidar_global_localize.py -- ORB 匹配一次性全局定位, 发布 map 系初始观测.
 对齐 find_robot.py: cv2.imread 加载 PGM, 同款 scan 渲染, 同款 solve_kidnap.
 """
 
@@ -13,12 +13,18 @@ import rclpy
 import yaml
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
-from tf2_ros import StaticTransformBroadcaster
+from std_srvs.srv import Empty
 
-from global_localizer import kidnap_solver
+import sys
+_base = os.path.dirname(os.path.abspath(__file__))
+for _ in range(6):
+    _base = os.path.dirname(_base)
+_krf_path = os.path.join(_base, "src", "kidnapped_robot_finder")
+if os.path.isdir(_krf_path) and _krf_path not in sys.path:
+    sys.path.insert(0, _krf_path)
+from global_localizer import kidnap_solver  # type: ignore[import-unresolved]
 
 
 class LidarGlobalLocalize(Node):
@@ -55,14 +61,16 @@ class LidarGlobalLocalize(Node):
         self._max_range = float(self.get_parameter("lidar_max_range").value)
         self._map_resolution = float(self.get_parameter("map_resolution").value)
         self._map_origin = (0.0, 0.0)
+        self._map_pose_offset = (0.0, 0.0)
 
         self._map_image = None
         self._map_ready = False
         self._scan_image = None
         self._min_distance = None
         self._scan_count = 0
+        self._last_scan_header = None
         self._localized = False
-        self._latest_odom = None
+        self._cancel_requested = False
 
         self._load_map_file()
 
@@ -71,19 +79,20 @@ class LidarGlobalLocalize(Node):
 
         self._scan_sub = self.create_subscription(
             LaserScan, self._scan_topic, self._scan_callback, qos_profile_sensor_data)
-        self._odom_sub = self.create_subscription(
-            Odometry, "/localized_odom", self._odom_callback, 10)
-        self._tf_broadcaster = StaticTransformBroadcaster(self)
+        self._initial_pose_pub = self.create_publisher(
+            Odometry, "/lidar_global/match_pose", 10)
 
-        self._pending_pose = None
-        self._repub_count = 0
-        self._repub_timer = self.create_timer(0.5, self._publish_map_odom_tf)
+        # 重定位服务：允许外部节点在导航到达目标点后触发全局重定位
+        self._relocalize_srv = self.create_service(
+            Empty, "/trigger_relocalize", self._relocalize_callback)
 
-        # 立即发布默认 TF, 建立 map 帧, 避免 ORB 计算期间系统瘫痪
-        self._publish_default_tf()
+        # 取消重定位服务：允许外部节点在重定位期间收到新目标时截断定位
+        self._cancel_relocalize_srv = self.create_service(
+            Empty, "/cancel_relocalize", self._cancel_relocalize_callback)
 
         self.get_logger().info(
-            f"ORB 全局定位已就绪, 地图: {self._map_file_path}")
+            f"ORB 全局定位已就绪, 地图: {self._map_file_path}"
+            ", 服务 /trigger_relocalize, /cancel_relocalize 可用")
 
     # ============== 地图 ==============
 
@@ -117,10 +126,13 @@ class LidarGlobalLocalize(Node):
             with open(yaml_path, "r", encoding="utf-8") as f:
                 meta = yaml.safe_load(f)
             origin = meta.get("origin", [0.0, 0.0, 0.0])
+            pose_offset = meta.get("localization_pose_offset", [0.0, 0.0])
             self._map_origin = (float(origin[0]), float(origin[1]))
+            self._map_pose_offset = (float(pose_offset[0]), float(pose_offset[1]))
             self._map_resolution = float(meta.get("resolution", self._map_resolution))
             self.get_logger().info(
-                f"从 YAML 读取: origin={self._map_origin}, resolution={self._map_resolution}")
+                f"从 YAML 读取: origin={self._map_origin}, resolution={self._map_resolution}, "
+                f"pose_offset={self._map_pose_offset}")
 
         self._map_ready = True
         self.get_logger().info(
@@ -129,12 +141,12 @@ class LidarGlobalLocalize(Node):
     # ============== 激光 ==============
 
     def _scan_callback(self, msg: LaserScan):
-        if self._localized:
+        if self._localized or self._cancel_requested:
             return
         image = np.zeros((self._image_size, self._image_size), dtype=np.uint8)
         min_distance = math.inf
         for i, range_val in enumerate(msg.ranges):
-            if 0 < range_val < self._max_range:
+            if 0.25 < range_val < self._max_range:
                 angle = msg.angle_min + i * msg.angle_increment
                 x = range_val * math.cos(angle)
                 y = range_val * math.sin(angle)
@@ -144,6 +156,7 @@ class LidarGlobalLocalize(Node):
                 cv2.circle(image, (px, py), radius=1, color=255, thickness=-1)
         self._scan_image = image
         self._min_distance = min_distance
+        self._last_scan_header = msg.header
         self._scan_count += 1
 
         if self._map_ready and self._scan_count >= 3:
@@ -151,19 +164,41 @@ class LidarGlobalLocalize(Node):
 
     # ============== 定位 ==============
 
-    def _publish_default_tf(self):
-        t = TransformStamped()
-        t.header.stamp = rclpy.time.Time(seconds=0, nanoseconds=0).to_msg()
-        t.header.frame_id = "map"
-        t.child_frame_id = "odom"
-        t.transform.translation.x = 0.0
-        t.transform.translation.y = 0.0
-        t.transform.translation.z = 0.0
-        t.transform.rotation.w = 1.0
-        self._tf_broadcaster.sendTransform(t)
-        self.get_logger().info("已发送默认 map->odom TF (0,0,0), 等待 ORB 定位...")
+    def _relocalize_callback(self, request, response):
+        """外部触发重定位：重置状态，重新收集激光扫描并执行全局定位。"""
+        if not self._map_ready:
+            self.get_logger().warn("重定位请求被拒绝: 地图未就绪")
+            return response
+
+        self.get_logger().info("收到重定位请求, 重置定位状态...")
+        self._cancel_requested = False
+        self._localized = False
+        self._scan_count = 0
+        self._scan_image = None
+        self.get_logger().info("重定位状态已重置, 等待激光扫描触发定位...")
+        return response
+
+    def _cancel_relocalize_callback(self, request, response):
+        """取消正在进行的重定位：停止扫描收集，丢弃定位结果，保持当前 map->odom TF 不变。
+
+        只影响当前正在执行的定位流程（扫描收集 / ORB 求解），不阻止未来的重定位请求。
+        """
+        self.get_logger().info("收到取消重定位请求")
+        if self._localized:
+            # 当前未在重定位（可能 trigger 还在异步传输中，尚未处理）
+            # 设置取消标志，trigger 到达后会立即清除，但扫描收集和求解会被跳过
+            self.get_logger().info("当前未在重定位中, 设置取消标志以防 trigger 即将到达")
+        self._cancel_requested = True
+        self._localized = True  # 停止扫描收集
+        self._scan_count = 0
+        self._scan_image = None
+        self.get_logger().info("重定位已取消, 保持当前 map->odom TF")
+        return response
 
     def _run_localization(self):
+        if self._cancel_requested:
+            self.get_logger().info("重定位已被取消, 丢弃当前定位结果")
+            return
         self._localized = True
         self.get_logger().info(f"ORB 匹配中... min_dist={self._min_distance:.2f}m")
 
@@ -172,62 +207,48 @@ class LidarGlobalLocalize(Node):
                 self._scan_image, self._map_image, self._min_distance,
                 map_resolution=self._map_resolution,
                 map_origin=self._map_origin,
+                map_pose_offset=self._map_pose_offset,
                 max_iterations=self._max_iter,
                 stop_search_threshold=self._stop_thresh,
                 lidar_range=self._max_range,
             )
             if result is None:
-                self.get_logger().error("定位失败: 未找到候选位姿")
+                self.get_logger().error("定位失败: 未找到候选位姿, 将重试")
+                self._localized = False
                 return
             x, y, yaw, f1 = result
             yaw = math.atan2(math.sin(yaw + math.pi), math.cos(yaw + math.pi))
         except Exception as e:
-            self.get_logger().error(f"定位失败: {e}")
+            self.get_logger().error(f"定位失败: {e}, 将重试")
+            self._localized = False
+            return
+
+        # 求解器可能耗时较长，再次检查是否已被取消
+        if self._cancel_requested:
+            self.get_logger().info("重定位已被取消, 丢弃求解结果")
             return
 
         self.get_logger().info(
             f"定位完成: x={x:.3f} y={y:.3f} yaw={math.degrees(yaw):.1f}° F1={f1:.1f}"
         )
-        self._pending_pose = (x, y, yaw)
-        self._repub_count = 0
+        self._publish_initial_pose(x, y, yaw)
 
     # ============== 发布 ==============
 
-    def _odom_callback(self, msg: Odometry):
-        self._latest_odom = msg
-
-    def _publish_map_odom_tf(self):
-        if self._pending_pose is None or self._latest_odom is None:
+    def _publish_initial_pose(self, x: float, y: float, yaw: float):
+        if self._last_scan_header is None:
+            self.get_logger().warn("未保存激光时间戳，丢弃初始定位观测")
             return
-        if self._repub_count >= 5:
-            self._repub_timer.cancel()
-            return
-        map_x, map_y, map_yaw = self._pending_pose
-        odom = self._latest_odom
-        q = odom.pose.pose.orientation
-        odom_yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
-                              1.0 - 2.0 * (q.y * q.y + q.z * q.z))
-
-        tf_yaw = math.atan2(math.sin(map_yaw - odom_yaw),
-                            math.cos(map_yaw - odom_yaw))
-
-        t = TransformStamped()
-        t.header.stamp = rclpy.time.Time(seconds=0, nanoseconds=0).to_msg()
-        t.header.frame_id = "map"
-        t.child_frame_id = "odom"
-        t.transform.translation.x = map_x - odom.pose.pose.position.x
-        t.transform.translation.y = map_y - odom.pose.pose.position.y
-        t.transform.translation.z = 0.0
-        t.transform.rotation.z = math.sin(tf_yaw * 0.5)
-        t.transform.rotation.w = math.cos(tf_yaw * 0.5)
-        self._tf_broadcaster.sendTransform(t)
-
-        self._repub_count += 1
-        self.get_logger().info(
-            f"已发布 map->odom 静态 TF: x={t.transform.translation.x:.3f} "
-            f"y={t.transform.translation.y:.3f} yaw={math.degrees(tf_yaw):.1f}° "
-            f"({self._repub_count}/5)"
-        )
+        observation = Odometry()
+        observation.header = self._last_scan_header
+        observation.header.frame_id = "map"
+        observation.child_frame_id = "base_footprint"
+        observation.pose.pose.position.x = x
+        observation.pose.pose.position.y = y
+        observation.pose.pose.orientation.z = math.sin(yaw * 0.5)
+        observation.pose.pose.orientation.w = math.cos(yaw * 0.5)
+        self._initial_pose_pub.publish(observation)
+        self.get_logger().info("已发布初始 map 系定位观测，等待 map_odom_corrector 更新 TF")
 
 
 def main(args=None):

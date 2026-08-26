@@ -11,9 +11,11 @@ import numpy as np
 import rclpy
 import rclpy.time
 import sensor_msgs_py.point_cloud2 as pc2
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan, PointCloud2
+from std_msgs.msg import Header
 from tf2_ros import Buffer, TransformException, TransformListener
 
 
@@ -60,10 +62,11 @@ class LaserScanToPoints(Node):
             return
 
         try:
+            scan_time = rclpy.time.Time.from_msg(msg.header.stamp)
             transform = self._tf_buffer.lookup_transform(
                 self._target_frame,
                 source_frame,
-                rclpy.time.Time(),
+                scan_time,
                 self._tf_timeout,
             )
         except TransformException as e:
@@ -117,8 +120,8 @@ class LaserScanToPoints(Node):
 
         cloud = np.array(points, dtype=np.float32)
 
-        header = msg.header
-        header.stamp = self.get_clock().now().to_msg()
+        header = Header()
+        header.stamp = msg.header.stamp
         header.frame_id = self._target_frame
         cloud_msg = pc2.create_cloud_xyz32(header, cloud)
         self._pub.publish(cloud_msg)
@@ -141,11 +144,14 @@ def _quat_to_rot(qx, qy, qz, qw):
 def main(args=None):
     rclpy.init(args=args)
     node = LaserScanToPoints()
+    executor = MultiThreadedExecutor(num_threads=2)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
+        executor.shutdown()
         node.destroy_node()
         rclpy.shutdown()
 

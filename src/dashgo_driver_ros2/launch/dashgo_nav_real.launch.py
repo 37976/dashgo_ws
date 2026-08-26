@@ -67,7 +67,7 @@ def generate_launch_description():
     resolved_ports = resolve_serial_ports()
     driver_share = get_package_share_directory("dashgo_driver_ros2")
     nav_share_dir = get_package_share_directory("nav_slam")
-    default_nav_map = os.path.join(nav_share_dir, "map", "map.yaml")              # 静态地图读取接口
+    default_nav_map = os.path.join(nav_share_dir, "map", "dashgo_slam_map.yaml")              # 静态地图读取接口
     default_nav_rviz = os.path.join(nav_share_dir, "config", "rviz.rviz")
     default_robot_urdf = os.path.join(driver_share, "urdf", "dashgo_visual.urdf")
 
@@ -110,6 +110,14 @@ def generate_launch_description():
     use_pointcloud_obstacles = LaunchConfiguration("use_pointcloud_obstacles")
     use_dynamic_obstacle_points = LaunchConfiguration("use_dynamic_obstacle_points")
     use_slam = LaunchConfiguration("use_slam")
+    use_continuous_orb = LaunchConfiguration("use_continuous_orb")
+    goal_relocalization_enabled = LaunchConfiguration("goal_relocalization_enabled")
+    orb_match_period_sec = LaunchConfiguration("orb_match_period_sec")
+    orb_max_iterations = LaunchConfiguration("orb_max_iterations")
+    orb_min_f1_score = LaunchConfiguration("orb_min_f1_score")
+    orb_required_consistent_matches = LaunchConfiguration("orb_required_consistent_matches")
+    orb_consistent_translation_m = LaunchConfiguration("orb_consistent_translation_m")
+    orb_consistent_yaw_deg = LaunchConfiguration("orb_consistent_yaw_deg")
 
     return LaunchDescription(
         [
@@ -131,7 +139,7 @@ def generate_launch_description():
             DeclareLaunchArgument("laser_frame", default_value="laser"),
             DeclareLaunchArgument("laser_z", default_value="0.52"),
             DeclareLaunchArgument("points_frame", default_value="base_link"),
-            DeclareLaunchArgument("scan_min_range", default_value="0.30"),
+            DeclareLaunchArgument("scan_min_range", default_value="0.25"),
             DeclareLaunchArgument("web_host", default_value="0.0.0.0"),
             DeclareLaunchArgument("web_port", default_value="8080"),
             DeclareLaunchArgument("web_image_topic", default_value="/camera/camera/color/image_raw"),
@@ -142,7 +150,7 @@ def generate_launch_description():
             DeclareLaunchArgument("hotspot_ssid", default_value="Dashgo-Robot"),
             DeclareLaunchArgument("hotspot_password", default_value="dashgo12345"),
             DeclareLaunchArgument("hotspot_ifname", default_value=""),
-            DeclareLaunchArgument("map_odom_topic", default_value="/localized_odom"),
+            DeclareLaunchArgument("map_odom_topic", default_value="/odom"),
             DeclareLaunchArgument("control_odom_topic", default_value="/odom_in_map"),
             # 新增：全局定位相关参数
             DeclareLaunchArgument("use_static_map", default_value="true"),
@@ -150,6 +158,14 @@ def generate_launch_description():
             DeclareLaunchArgument("use_pointcloud_obstacles", default_value="true"),
             DeclareLaunchArgument("use_dynamic_obstacle_points", default_value="false"),
             DeclareLaunchArgument("use_slam", default_value="false"),
+            DeclareLaunchArgument("use_continuous_orb", default_value="true"),
+            DeclareLaunchArgument("goal_relocalization_enabled", default_value="true"),
+            DeclareLaunchArgument("orb_match_period_sec", default_value="2.0"),
+            DeclareLaunchArgument("orb_max_iterations", default_value="50"),
+            DeclareLaunchArgument("orb_min_f1_score", default_value="35.0"),
+            DeclareLaunchArgument("orb_required_consistent_matches", default_value="2"),
+            DeclareLaunchArgument("orb_consistent_translation_m", default_value="0.30"),
+            DeclareLaunchArgument("orb_consistent_yaw_deg", default_value="5.0"),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(robot_launch),
                 condition=IfCondition(start_robot),
@@ -166,6 +182,7 @@ def generate_launch_description():
                     "laser_z": laser_z,
                     "publish_laser_tf": "false",
                     "publish_sonar_tf": "false",
+                    "publish_odom_tf": "false",
                 }.items(),
             ),
             LogInfo(msg=f"Dashgo auto-detected base port default: {resolved_ports['driver_port']}"),
@@ -232,20 +249,45 @@ def generate_launch_description():
                 ),
                 output="screen",
             ),
-            # ---- 全局定位：激光 ORB 全局定位 (SLAM模式时跳过) ----
+            # ---- map→odom 唯一校正器：融合初始定位和持续 ORB 观测 ----
+            Node(
+                package="nav_slam",
+                executable="map_odom_corrector",
+                name="map_odom_corrector",
+                condition=IfCondition(
+                    PythonExpression([
+                        "'", start_nav, "' == 'true' and '", use_slam,
+                        "' == 'false' and '", use_global_localize, "' == 'true'"
+                    ])
+                ),
+                output="screen",
+                parameters=[{
+                    "odom_topic": map_odom_topic,
+                    "match_pose_topic": "/orb/match_pose",
+                    "initial_pose_topic": "/lidar_global/match_pose",
+                    "state_history_sec": 30.0,
+                    "required_consistent_matches": orb_required_consistent_matches,
+                    "consistent_translation_m": orb_consistent_translation_m,
+                    "consistent_yaw_deg": orb_consistent_yaw_deg,
+                    "max_correction_linear_mps": 0.20,
+                    "max_correction_angular_degps": 12.0,
+                }],
+            ),
+            # ---- 全局定位：激光 ORB 初始观测 ----
             Node(
                 package="nav_slam",
                 executable="lidar_global_localize",
                 name="lidar_global_localize",
                 condition=IfCondition(
                     PythonExpression([
-                        "'", start_nav, "' == 'true' and '", use_slam, "' == 'false'"
+                        "'", start_nav, "' == 'true' and '", use_slam,
+                        "' == 'false' and '", use_global_localize, "' == 'true'"
                     ])
                 ),
                 output="screen",
                 parameters=[{
                     "map_yaml_path": nav_map_yaml,
-                    "scan_topic": "/scan",
+                    "scan_topic": "/scan_filtered",
                 }],
             ),
             # ---- 激光扫描直接转 map 帧点云 ----
@@ -256,7 +298,7 @@ def generate_launch_description():
                 condition=IfCondition(start_nav),
                 output="screen",
                 parameters=[{
-                    "scan_topic": "/scan",
+                    "scan_topic": "/scan_filtered",
                     "output_topic": "/mapokk",
                     "target_frame": "map",
                 }],
@@ -303,7 +345,7 @@ def generate_launch_description():
                         "obstacle_radius": 0.08,
                         "clear_radius": 0.20,
                         "projection_gap_fill_cells": 0,
-                        "odom_topic": map_odom_topic,
+                        "odom_topic": control_odom_topic,
                         "use_pointcloud_obstacles": use_pointcloud_obstacles,
                         "use_dynamic_obstacle_points": use_dynamic_obstacle_points,
                     }
@@ -338,6 +380,52 @@ def generate_launch_description():
                     "output_topic": control_odom_topic,
                 }],
             ),
+            # ---- 持续 ORB 地图匹配 ----
+            Node(
+                package="nav_slam",
+                executable="orb_map_matcher",
+                name="orb_map_matcher",
+                condition=IfCondition(
+                    PythonExpression([
+                        "'", start_nav, "' == 'true' and '", use_slam,
+                        "' == 'false' and '", use_global_localize,
+                        "' == 'true' and '", use_continuous_orb, "' == 'true'"
+                    ])
+                ),
+                output="screen",
+                parameters=[{
+                    "map_yaml_path": nav_map_yaml,
+                    "scan_topic": "/scan_filtered",
+                    "odom_topic": control_odom_topic,
+                    "match_pose_topic": "/orb/match_pose",
+                    "base_frame": base_frame,
+                    "match_period_sec": orb_match_period_sec,
+                    "lidar_max_range": 8.0,
+                    "map_resolution": 0.05,
+                    "max_iterations": orb_max_iterations,
+                    "min_f1_score": orb_min_f1_score,
+                    "local_search_radius_m": 1.0,
+                }],
+            ),
+            # ---- 到达目标后触发一次全局重定位 ----
+            Node(
+                package="nav_slam",
+                executable="nav_goal_relocalizer",
+                name="nav_goal_relocalizer",
+                condition=IfCondition(
+                    PythonExpression([
+                        "'", start_nav, "' == 'true' and '", use_slam,
+                        "' == 'false' and '", use_global_localize,
+                        "' == 'true' and '", goal_relocalization_enabled, "' == 'true'"
+                    ])
+                ),
+                output="screen",
+                parameters=[{
+                    "goal_relocalization_enabled": goal_relocalization_enabled,
+                    "min_relocalize_interval_sec": 10.0,
+                    "orb_disable_duration_sec": 30.0,
+                }],
+            ),
             # ---- map→odom fallback 静态 TF (SLAM/全局定位时跳过) ----
             Node(
                 package="nav_slam",
@@ -345,7 +433,8 @@ def generate_launch_description():
                 name="odom_map_tf",
                 condition=IfCondition(
                     PythonExpression([
-                        "'", start_nav, "' == 'true' and '", use_slam, "' == 'false'"
+                        "'", start_nav, "' == 'true' and '", use_slam,
+                        "' == 'false' and '", use_global_localize, "' == 'false'"
                     ])
                 ),
                 output="screen",

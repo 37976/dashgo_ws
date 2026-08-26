@@ -61,7 +61,7 @@ def get_f1_score(reference_img, tf_img):
 
 def _compute_adaptive_iterations(num_candidates, user_max_iterations, time_budget_ms):
     """根据候选区域像素数自适应计算迭代次数，保持与小地图相同的采样密度."""
-    BASE_ITERS = 30
+    BASE_ITERS = 60
     BASE_CANDIDATE_PX = 5000       # 10m 地图典型候选像素数
     MS_PER_ITER = 50               # 每次迭代约 30-80ms (大地图 np.where 开销大)
     suggested = max(BASE_ITERS, int(num_candidates * BASE_ITERS / BASE_CANDIDATE_PX))
@@ -69,30 +69,127 @@ def _compute_adaptive_iterations(num_candidates, user_max_iterations, time_budge
     return min(suggested, user_max_iterations, max_by_time)
 
 
-def _get_candidates(map_image, min_distance, map_resolution, min_required=500):
+def _occupancy_masks(map_image, free_thresh=0.196,
+                     occupied_thresh=0.65, negate=0):
+    """Return known-free and occupied masks using ROS map YAML semantics."""
+    normalized = map_image.astype(np.float32) / 255.0
+    occupancy = normalized if int(negate) else 1.0 - normalized
+    return occupancy <= free_thresh, occupancy >= occupied_thresh
+
+
+def _get_candidates(map_image, min_distance, map_resolution, min_required=500,
+                    known_free_mask=None):
     """渐进放宽 distance_transform 的 threshold_px，确保候选数 >= min_required."""
+    if known_free_mask is None:
+        known_free_mask, _ = _occupancy_masks(map_image)
     for threshold_px in [3, 6, 12, 24]:
         candidate_area = dt.get_distance_transform(
             map_image, min_distance,
             map_resolution=map_resolution,
-            threshold_px=threshold_px)
+            threshold_px=threshold_px,
+            known_free_mask=known_free_mask)
         red_pixels = np.where(candidate_area[:, :, 0] == 255)
         num = len(red_pixels[0])
         if num >= min_required:
             return candidate_area, red_pixels, num, threshold_px
 
     # 回退：全部自由空间
-    _, binary = cv2.threshold(map_image, 150, 255, cv2.THRESH_BINARY)
+    binary = np.where(known_free_mask, 255, 0).astype(np.uint8)
     red_pixels = np.where(binary == 255)
     num = len(red_pixels[0])
     candidate_area = cv2.cvtColor(binary, cv2.COLOR_GRAY2RGB)
     return candidate_area, red_pixels, num, -1
 
 
+def _map_pixel_to_world(pixel_uv, map_height_px, map_resolution, map_origin,
+                        map_pose_offset=(0.0, 0.0)):
+    """Convert an image pixel-center coordinate into the map world frame."""
+    u, v = np.asarray(pixel_uv, dtype=float)
+    origin_x, origin_y = np.asarray(map_origin, dtype=float)
+    offset_x, offset_y = np.asarray(map_pose_offset, dtype=float)
+    return np.array([
+        origin_x + (u + 0.5) * map_resolution + offset_x,
+        origin_y + (map_height_px - v - 0.5) * map_resolution + offset_y,
+    ])
+
+
+def _map_world_to_pixel(world_xy, map_height_px, map_resolution, map_origin,
+                        map_pose_offset=(0.0, 0.0)):
+    """Convert map world coordinates to image pixel-center coordinates."""
+    x, y = np.asarray(world_xy, dtype=float)
+    origin_x, origin_y = np.asarray(map_origin, dtype=float)
+    offset_x, offset_y = np.asarray(map_pose_offset, dtype=float)
+    return np.array([
+        (x - origin_x - offset_x) / map_resolution - 0.5,
+        map_height_px - (y - origin_y - offset_y) / map_resolution - 0.5,
+    ])
+
+
+def _limit_candidates_to_radius(red_pixels, center_pixel_uv, radius_px):
+    """Keep candidate (row, col) pixels within a circular search window."""
+    rows = np.asarray(red_pixels[0])
+    cols = np.asarray(red_pixels[1])
+    center_u, center_v = np.asarray(center_pixel_uv, dtype=float)
+    keep = ((cols - center_u) ** 2 + (rows - center_v) ** 2) <= radius_px ** 2
+    return rows[keep], cols[keep]
+
+
+def _select_stratified_candidates(red_pixels, count):
+    """Select deterministic candidates distributed across the available area."""
+    rows = np.asarray(red_pixels[0])
+    cols = np.asarray(red_pixels[1])
+    if count <= 0 or rows.size == 0:
+        return []
+    if rows.size <= count:
+        return list(zip(rows.tolist(), cols.tolist()))
+
+    row_min, row_max = int(rows.min()), int(rows.max())
+    col_min, col_max = int(cols.min()), int(cols.max())
+    height = row_max - row_min + 1
+    width = col_max - col_min + 1
+    aspect = width / max(height, 1)
+    grid_cols = max(1, int(math.ceil(math.sqrt(count * aspect))))
+    grid_rows = max(1, int(math.ceil(count / grid_cols)))
+
+    row_cells = np.minimum((rows - row_min) * grid_rows // height, grid_rows - 1)
+    col_cells = np.minimum((cols - col_min) * grid_cols // width, grid_cols - 1)
+    cell_ids = row_cells * grid_cols + col_cells
+
+    selected_indices = []
+    for cell_id in np.unique(cell_ids):
+        indices = np.flatnonzero(cell_ids == cell_id)
+        cell_row = int(cell_id) // grid_cols
+        cell_col = int(cell_id) % grid_cols
+        target_row = row_min + (cell_row + 0.5) * height / grid_rows
+        target_col = col_min + (cell_col + 0.5) * width / grid_cols
+        distances = ((rows[indices] - target_row) ** 2
+                     + (cols[indices] - target_col) ** 2)
+        selected_indices.append(int(indices[int(np.argmin(distances))]))
+
+    if len(selected_indices) > count:
+        keep = np.linspace(0, len(selected_indices) - 1, count, dtype=int)
+        selected_indices = [selected_indices[index] for index in keep]
+    elif len(selected_indices) < count:
+        selected = set(selected_indices)
+        for index in np.linspace(0, rows.size - 1, rows.size, dtype=int):
+            candidate_index = int(index)
+            if candidate_index in selected:
+                continue
+            selected_indices.append(candidate_index)
+            selected.add(candidate_index)
+            if len(selected_indices) == count:
+                break
+
+    return [(int(rows[index]), int(cols[index])) for index in selected_indices]
+
+
 def solve_kidnap(orig_scan_img, map_image, min_distance, map_origin = None,
                  map_resolution = 0.05, max_iterations = 250,
                  max_time_budget_ms = 5000,
                  stop_search_threshold = 50, lidar_range = 8.0,
+                 map_pose_offset = (0.0, 0.0),
+                 search_center_world = None, search_radius_m = None,
+                 free_thresh = 0.196, occupied_thresh = 0.65, negate = 0,
                  show_plot = False):
     orig_scan_img = cv2.flip(orig_scan_img, 1)
 
@@ -101,39 +198,42 @@ def solve_kidnap(orig_scan_img, map_image, min_distance, map_origin = None,
 
     st_time = time.perf_counter()
 
+    known_free_mask, occupied_mask = _occupancy_masks(
+        map_image, free_thresh, occupied_thresh, negate)
+
     # === 预计算距离变换 (加速模拟扫描) ===
-    dt_map = s_sim.compute_dt_map(map_image)
+    dt_map = s_sim.compute_dt_map(
+        map_image, known_free_mask=known_free_mask)
 
     # === 自适应候选区域 + 迭代次数 ===
     candidate_area, red_pixels, num_red_pixels, used_threshold = _get_candidates(
-        map_image, distance, map_resolution, min_required=500)
+        map_image, distance, map_resolution, min_required=500,
+        known_free_mask=known_free_mask)
+
+    search_mode = "global"
+    if search_center_world is not None and search_radius_m is not None:
+        if map_origin is None:
+            map_origin = (0.0, 0.0)
+        center_pixel = _map_world_to_pixel(
+            search_center_world, map_image.shape[0], map_resolution,
+            map_origin, map_pose_offset)
+        red_pixels = _limit_candidates_to_radius(
+            red_pixels, center_pixel, float(search_radius_m) / map_resolution)
+        num_red_pixels = len(red_pixels[0])
+        search_mode = f"local({float(search_radius_m):.2f}m)"
 
     with open("/tmp/kidnap_debug.txt", "a") as f:
         f.write(f"min_dist={distance:.2f}m({distance/map_resolution:.1f}px) "
                 f"red={num_red_pixels} threshold_px={used_threshold}\n")
-    print(f"[DEBUG] min_distance={distance:.2f}m ({distance/map_resolution:.1f}px), "
-          f"candidates={num_red_pixels}, threshold_px={used_threshold}", flush=True)
-
     n_iterations = _compute_adaptive_iterations(num_red_pixels, max_iterations, max_time_budget_ms)
-    print(f"[DEBUG] 自适应迭代: {n_iterations} (候选={num_red_pixels}, "
-          f"上限={max_iterations}, 时间预算={max_time_budget_ms}ms)", flush=True)
+    print(f"[DEBUG] ORB 搜索: mode={search_mode}, min_distance={distance:.2f}m, candidates={num_red_pixels}, "
+          f"iterations={n_iterations}/{max_iterations}, budget={max_time_budget_ms}ms", flush=True)
 
     candidate_area_to_show = candidate_area.copy()
 
-    random_coords = []
-    removal_radius = max(3, int(0.5 / map_resolution))  # ~0.5m = 机器人半径
-    for _ in range(n_iterations):
-
-        if num_red_pixels > 0:
-            index = np.random.randint(num_red_pixels)
-            x = red_pixels[0][index]
-            y = red_pixels[1][index]
-            random_coords.append((x, y))
-            cv2.circle(candidate_area_to_show, (y, x), 3, (0, 255, 0), -1)
-
-            cv2.circle(candidate_area, (y, x), removal_radius, (0, 255, 0), -1)
-            red_pixels = np.where(candidate_area[:,:,0] == 255)
-            num_red_pixels = len(red_pixels[0])
+    sampled_coords = _select_stratified_candidates(red_pixels, n_iterations)
+    for row, col in sampled_coords:
+        cv2.circle(candidate_area_to_show, (col, row), 3, (0, 255, 0), -1)
 
     threshold_accuracy = stop_search_threshold # % Needs fine tuning further ---- !
     max_accuracy = 0
@@ -151,13 +251,19 @@ def solve_kidnap(orig_scan_img, map_image, min_distance, map_origin = None,
 
     sim_scan_time, matching_time, scoring_time = 0, 0, 0
     # Use the random coordinates for further processing
-    for coord in random_coords:
+    for coord in sampled_coords:
+        elapsed_ms = (time.perf_counter() - st_time) * 1000.0
+        if elapsed_ms >= max_time_budget_ms:
+            print(f"[DEBUG] 达到时间预算 {max_time_budget_ms}ms，停止搜索", flush=True)
+            break
         iters += 1
-        print(f"Iteration: {iters}/{len(random_coords)}", flush=True)
         x, y = coord
         # Do something with the coordinates
         s = time.perf_counter()
-        scan_image = pf.get_scan_image(map_image.copy(), [y, x], map_resolution = map_resolution, max_range = 8, dt_map=dt_map)
+        scan_image = pf.get_scan_image(
+            map_image.copy(), [y, x], map_resolution=map_resolution,
+            max_range=8, dt_map=dt_map,
+            known_free_mask=known_free_mask, occupied_mask=occupied_mask)
         e = time.perf_counter()
         time_taken = (e - s) * 1000
         sim_scan_time += time_taken
@@ -174,7 +280,6 @@ def solve_kidnap(orig_scan_img, map_image, min_distance, map_origin = None,
         est_robot_px = np.array([y, x]) + (np.array(tf_robot_pose) - np.array(robot_coord))
         if (est_robot_px[0] < 0 or est_robot_px[0] >= map_image.shape[1] or
             est_robot_px[1] < 0 or est_robot_px[1] >= map_image.shape[0]):
-            print(f"Iteration {iters}: 定位结果超出地图范围 ({est_robot_px[0]:.0f},{est_robot_px[1]:.0f}), 丢弃")
             continue
 
         s = time.perf_counter()
@@ -184,7 +289,6 @@ def solve_kidnap(orig_scan_img, map_image, min_distance, map_origin = None,
         scoring_time += time_taken
 
         all_candidates.append([percentage, y, x])
-        print("F1 Score: ", percentage)
         if percentage > max_accuracy:
             max_accuracy = percentage
             best_coord = coord
@@ -199,13 +303,10 @@ def solve_kidnap(orig_scan_img, map_image, min_distance, map_origin = None,
 
 
     end_time = time.perf_counter()
-    print("\n\n\n-------------------------\n\n\n")
     if best_coord is None:
         print("ERROR: 未找到任何有效候选位姿")
         return None
     x, y = best_coord
-    print("Highest F1 score (x100): ", max_accuracy)
-    print("Time taken: ms", (end_time - st_time) * 1000)
     total_time = (end_time - st_time) * 1000
 
     # print("Sim scan time: ", sim_scan_time, " Percentage: ", (sim_scan_time / total_time) * 100)
@@ -229,25 +330,20 @@ def solve_kidnap(orig_scan_img, map_image, min_distance, map_origin = None,
     vector_length = 20 #px
 
 
-    #print("BEst scan center: ", best_scan_center)
-    print("Robot on map: ", robot_on_map)
-    print("Theta in degrees: ", best_theta_degrees)
-
-
     # 转世界坐标 (m)
     if map_origin is None:
         map_origin = np.array([0.0, 0.0])
     else:
         map_origin = np.array(map_origin, dtype=float)
 
-    robot_in_map_pixels = robot_on_map.copy()
-    robot_in_map_pixels[1] = map_image.shape[0] - robot_in_map_pixels[1]
-    robot_in_map_meters = robot_in_map_pixels * map_resolution + map_origin
+    robot_in_map_meters = _map_pixel_to_world(
+        robot_on_map, map_image.shape[0], map_resolution, map_origin,
+        map_pose_offset)
     robot_angle_in_map = math.radians(-best_theta_degrees)
 
-    print("----------------------------")
-    print("Robot in map meters: ", robot_in_map_meters)
-    print("Robot theta (on map) in degrees: ", math.degrees(robot_angle_in_map))
+    print(f"[DEBUG] ORB 完成: f1={max_accuracy:.1f}, tested={iters}/{len(sampled_coords)}, "
+          f"elapsed={total_time:.0f}ms, map=({robot_in_map_meters[0]:.2f},"
+          f"{robot_in_map_meters[1]:.2f},{math.degrees(robot_angle_in_map):.1f}°)")
 
     if show_plot:
         fig, axs = plt.subplots(1, 6, figsize=(12, 4))

@@ -3,7 +3,8 @@ import numpy as np
 import math
 
 
-def bresenham_ray_cast(image, x0, y0, angle):
+def bresenham_ray_cast(image, x0, y0, angle,
+                       known_free_mask=None, occupied_mask=None):
     x0, y0 = int(x0), int(y0)
     angle_rad = math.radians(angle)
     dx = math.cos(angle_rad)
@@ -11,6 +12,10 @@ def bresenham_ray_cast(image, x0, y0, angle):
 
     x, y = x0, y0
     while 0 <= x < image.shape[1] and 0 <= y < image.shape[0]:
+        if known_free_mask is not None and not known_free_mask[int(y), int(x)]:
+            if occupied_mask is not None and occupied_mask[int(y), int(x)]:
+                return int(x), int(y)
+            return -1, -1
         if image[int(y), int(x)] < 100:
             return int(x), int(y)
         x += dx
@@ -18,7 +23,8 @@ def bresenham_ray_cast(image, x0, y0, angle):
     return -1, -1
 
 
-def _dt_ray_cast(dt_map, x0, y0, dx, dy, max_range_px):
+def _dt_ray_cast(dt_map, x0, y0, dx, dy, max_range_px,
+                 known_free_mask=None):
     """距离变换跳跃步进: 每次跳跃到最近障碍物的距离, O(log range)."""
     h, w = dt_map.shape
     x, y = float(x0), float(y0)
@@ -28,6 +34,15 @@ def _dt_ray_cast(dt_map, x0, y0, dx, dy, max_range_px):
             return -1, -1
         dist = dt_map[py, px]
         if dist <= 1.5:
+            if known_free_mask is not None:
+                for _ in range(6):
+                    px, py = int(x), int(y)
+                    if px < 0 or px >= w or py < 0 or py >= h:
+                        return -1, -1
+                    if not known_free_mask[py, px]:
+                        return px, py
+                    x += dx * 0.5
+                    y += dy * 0.5
             return px, py
         step = max(1.0, dist - 1.0)
         x += dx * step
@@ -37,7 +52,8 @@ def _dt_ray_cast(dt_map, x0, y0, dx, dy, max_range_px):
     return -1, -1
 
 
-def get_lidar_points(bw_image, x0, y0, add_noise=True, dt_map=None):
+def get_lidar_points(bw_image, x0, y0, add_noise=True, dt_map=None,
+                     known_free_mask=None, occupied_mask=None):
     lidar_range = 8  # m
     map_resolution = 0.05  # m/pixel
     mean = 0
@@ -54,7 +70,12 @@ def get_lidar_points(bw_image, x0, y0, add_noise=True, dt_map=None):
         dx_arr = np.cos(angles_rad)
         dy_arr = np.sin(angles_rad)
         for i in range(len(angle_range)):
-            point = _dt_ray_cast(dt_map, x0, y0, float(dx_arr[i]), float(dy_arr[i]), max_range_px)
+            point = _dt_ray_cast(
+                dt_map, x0, y0, float(dx_arr[i]), float(dy_arr[i]),
+                max_range_px, known_free_mask=known_free_mask)
+            if (point[0] != -1 and occupied_mask is not None
+                    and not occupied_mask[point[1], point[0]]):
+                continue
             distance = math.hypot(point[0] - x0, point[1] - y0) if point[0] != -1 else float('inf')
             if distance < max_range_px and point[0] != -1 and point[1] != -1:
                 if add_noise:
@@ -71,7 +92,9 @@ def get_lidar_points(bw_image, x0, y0, add_noise=True, dt_map=None):
         noise_x = np.random.normal(mean, std_dev / map_resolution)
         noise_y = np.random.normal(mean, std_dev)
 
-        point = bresenham_ray_cast(bw_image, x0, y0, angle_range[i])
+        point = bresenham_ray_cast(
+            bw_image, x0, y0, angle_range[i],
+            known_free_mask=known_free_mask, occupied_mask=occupied_mask)
 
         distance = math.sqrt((point[0] - x0)**2 + (point[1] - y0)**2)
         if distance < max_range_px and point[0] != -1 and point[1] != -1:
@@ -86,7 +109,10 @@ def get_lidar_points(bw_image, x0, y0, add_noise=True, dt_map=None):
     return lidar_points
 
 
-def compute_dt_map(map_image):
+def compute_dt_map(map_image, known_free_mask=None):
     """预计算地图的原始距离变换 (float32 像素距离)."""
-    _, binary = cv2.threshold(map_image, 150, 255, cv2.THRESH_BINARY)
+    if known_free_mask is None:
+        _, binary = cv2.threshold(map_image, 150, 255, cv2.THRESH_BINARY)
+    else:
+        binary = np.where(known_free_mask, 255, 0).astype(np.uint8)
     return cv2.distanceTransform(binary, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)

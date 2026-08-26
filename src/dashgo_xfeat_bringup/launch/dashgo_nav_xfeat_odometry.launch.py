@@ -51,6 +51,7 @@ def generate_launch_description():
     correction_gain_xy = LaunchConfiguration("correction_gain_xy")
     correction_gain_yaw = LaunchConfiguration("correction_gain_yaw")
     max_delta_translation_diff_m = LaunchConfiguration("max_delta_translation_diff_m")
+    use_imu_yaw = LaunchConfiguration("use_imu_yaw")
     max_delta_yaw_diff_deg = LaunchConfiguration("max_delta_yaw_diff_deg")
     use_slam = LaunchConfiguration("use_slam")
 
@@ -82,6 +83,7 @@ def generate_launch_description():
         DeclareLaunchArgument("fused_odom_topic", default_value="/localized_odom"),
         DeclareLaunchArgument("correction_gain_xy", default_value="0.15"),
         DeclareLaunchArgument("correction_gain_yaw", default_value="0.10"),
+        DeclareLaunchArgument("use_imu_yaw", default_value="true"),
         DeclareLaunchArgument("max_delta_translation_diff_m", default_value="0.20"),
         DeclareLaunchArgument("max_delta_yaw_diff_deg", default_value="20.0"),
         DeclareLaunchArgument("use_slam", default_value="false"),
@@ -99,6 +101,7 @@ def generate_launch_description():
                 "publish_laser_tf": "false",
                 "publish_sonar_tf": "false",
                 "d435_serial_no": d435_serial_no,
+                "publish_odom_tf": "false",
             }.items(),
         ),
         TimerAction(
@@ -144,6 +147,10 @@ def generate_launch_description():
                         "output_odom_topic": fused_odom_topic,
                         "correction_gain_xy": correction_gain_xy,
                         "correction_gain_yaw": correction_gain_yaw,
+                        "imu_topic": "/imu/data",
+                        "use_imu_yaw": use_imu_yaw,
+                        "state_history_sec": 10.0,
+                        "max_observation_sync_sec": 0.15,
                         "max_delta_translation_diff_m": max_delta_translation_diff_m,
                         "max_delta_yaw_diff_deg": max_delta_yaw_diff_deg,
                     }],

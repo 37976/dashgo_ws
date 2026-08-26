@@ -1247,6 +1247,63 @@ void VoronoiGridPlanner::populateVoronoiSkeleton(
   }
 }
 
+visualization_msgs::msg::Marker VoronoiGridPlanner::extractSkeletonMarker(
+  const nav_msgs::msg::OccupancyGrid & skeleton) const
+{
+  visualization_msgs::msg::Marker marker;
+  marker.header.frame_id = skeleton.header.frame_id;
+  marker.header.stamp = skeleton.header.stamp;
+  marker.ns = "voronoi_skeleton";
+  marker.id = 0;
+  marker.type = visualization_msgs::msg::Marker::TRIANGLE_LIST;
+  marker.action = visualization_msgs::msg::Marker::ADD;
+  marker.pose.orientation.w = 1.0;
+  marker.scale.x = 1.0;
+  marker.scale.y = 1.0;
+  marker.scale.z = 1.0;
+  marker.color.r = 0.0;
+  marker.color.g = 1.0;
+  marker.color.b = 0.0;
+  marker.color.a = 1.0;
+
+  const int w = static_cast<int>(skeleton.info.width);
+  const int h = static_cast<int>(skeleton.info.height);
+  const double res = skeleton.info.resolution;
+  const double ox = skeleton.info.origin.position.x;
+  const double oy = skeleton.info.origin.position.y;
+
+  for (int x = 0; x < w; ++x) {
+    for (int y = 0; y < h; ++y) {
+      if (skeleton.data[x + y * w] != 0) {
+        continue;
+      }
+
+      const double x0 = ox + static_cast<double>(x) * res;
+      const double y0 = oy + static_cast<double>(y) * res;
+      const double x1 = x0 + res;
+      const double y1 = y0 + res;
+
+      geometry_msgs::msg::Point p1, p2, p3, p4;
+      p1.x = x0; p1.y = y0; p1.z = 0.0;
+      p2.x = x1; p2.y = y0; p2.z = 0.0;
+      p3.x = x1; p3.y = y1; p3.z = 0.0;
+      p4.x = x0; p4.y = y1; p4.z = 0.0;
+
+      // Triangle 1: bottom-left, bottom-right, top-right
+      marker.points.push_back(p1);
+      marker.points.push_back(p2);
+      marker.points.push_back(p3);
+
+      // Triangle 2: bottom-left, top-right, top-left
+      marker.points.push_back(p1);
+      marker.points.push_back(p3);
+      marker.points.push_back(p4);
+    }
+  }
+
+  return marker;
+}
+
 void VoronoiGridPlanner::getStartAndEndConfigurations(
   const geometry_msgs::msg::PoseStamped & start,
   const geometry_msgs::msg::PoseStamped & goal,
