@@ -162,7 +162,7 @@ def generate_launch_description():
             DeclareLaunchArgument("goal_relocalization_enabled", default_value="false"),
             DeclareLaunchArgument("orb_match_period_sec", default_value="2.0"),
             DeclareLaunchArgument("orb_max_iterations", default_value="50"),
-            DeclareLaunchArgument("orb_min_f1_score", default_value="35.0"),
+            DeclareLaunchArgument("orb_min_f1_score", default_value="20.0"),
             DeclareLaunchArgument("orb_required_consistent_matches", default_value="2"),
             DeclareLaunchArgument("orb_consistent_translation_m", default_value="0.30"),
             DeclareLaunchArgument("orb_consistent_yaw_deg", default_value="5.0"),
