@@ -1,0 +1,35 @@
+calibration_version: 1
+calibrated_at: "2026-09-07T11:49:39+08:00"
+
+# The robot was stationary with its base center on the selected grout
+# intersection and its forward direction aligned with tile +x.
+source_map_yaml: /home/xu/project/dashgo_ws/install/nav_slam/share/nav_slam/map/dashgo_slam_map.yaml
+map_frame: map
+tile_frame: tile_origin
+robot_frame: base_footprint
+
+# Pose of tile_origin in map: map -> tile_origin. Position uses the arithmetic
+# mean and yaw uses the circular mean of 25 independent ORB matches.
+map_to_tile_origin:
+  x_m: -3.622426294814795
+  y_m: 0.441522434424526
+  z_m: 0.0
+  yaw_rad: 0.520842639292687
+  yaw_deg: 29.842085021926
+  quaternion_xyzw: [0.0, 0.0, 0.257487688146711, 0.966281579278453]
+
+# Original occupancy-grid image origin expressed in tile_origin coordinates.
+static_map_image_origin_in_tile:
+  x_m: -5.202882705957892
+  y_m: -4.380892779793212
+  yaw_rad: -0.520842639292687
+
+capture:
+  orb_matcher_paused: false
+  independent_orb_sample_count: 25
+  x_std_m: 0.037305
+  y_std_m: 0.036856
+  yaw_std_deg: 0.967455
+  x_range_m: 0.15
+  y_range_m: 0.15
+  yaw_range_deg: 3.894279

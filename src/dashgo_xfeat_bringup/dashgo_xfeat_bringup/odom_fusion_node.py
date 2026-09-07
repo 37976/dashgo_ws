@@ -465,7 +465,6 @@ class OdomFusionNode(Node):
             return
         self.last_log_sec = now_sec
         self._append_csv_log()
-        self.get_logger().info(f"{self._last_fusion_status} | {self._last_status_details}")
 
     def _init_csv_log(self) -> None:
         csv_dir = os.path.dirname(self.csv_log_path)

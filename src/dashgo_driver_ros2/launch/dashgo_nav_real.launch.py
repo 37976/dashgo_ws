@@ -79,7 +79,6 @@ def generate_launch_description():
     start_nav = LaunchConfiguration("start_nav")
     start_nav_rviz = LaunchConfiguration("start_nav_rviz")
     start_lidar = LaunchConfiguration("start_lidar")
-    start_d435 = LaunchConfiguration("start_d435")
     start_web_ui = LaunchConfiguration("start_web_ui")
     start_hotspot = LaunchConfiguration("start_hotspot")
     publish_robot_model = LaunchConfiguration("publish_robot_model")
@@ -125,7 +124,6 @@ def generate_launch_description():
             DeclareLaunchArgument("start_nav", default_value="true"),
             DeclareLaunchArgument("start_nav_rviz", default_value="true"),
             DeclareLaunchArgument("start_lidar", default_value="true"),
-            DeclareLaunchArgument("start_d435", default_value="true"),
             DeclareLaunchArgument("start_web_ui", default_value="true"),
             DeclareLaunchArgument("start_hotspot", default_value="false"),
             DeclareLaunchArgument("publish_robot_model", default_value="true"),
@@ -171,7 +169,7 @@ def generate_launch_description():
                 condition=IfCondition(start_robot),
                 launch_arguments={
                     "start_lidar": start_lidar,
-                    "start_d435": start_d435,
+                    "start_d435": "false",
                     "start_t265": "false",
                     "driver_port": driver_port,
                     "driver_baud": "115200",

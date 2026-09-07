@@ -165,19 +165,12 @@ class XFeatRgbdOdometry(Node):
         self._pose_world_cam = np.eye(4, dtype=np.float32)
         self._last_stamp_sec: Optional[float] = None
         self._last_translation = np.zeros((3,), dtype=np.float64)
-        self._last_logged_translation = np.zeros((3,), dtype=np.float64)
         self._base_to_camera_tf: Optional[np.ndarray] = None
         self._camera_frame_warned = False
         self._control_mode = "nav"
         self._path_active = False
         self._last_path_sec: Optional[float] = None
         self._last_nonzero_cmd_sec: Optional[float] = None
-        self._last_delta_debug = {
-            "dx": 0.0,
-            "dy": 0.0,
-            "dyaw_deg": 0.0,
-        }
-
         configured_weights_path = str(self.get_parameter("xfeat_weights_path").value)
         if configured_weights_path and os.path.isfile(configured_weights_path):
             weights_path = configured_weights_path
@@ -285,7 +278,6 @@ class XFeatRgbdOdometry(Node):
                 self._pose_world_cam = self._pose_world_cam @ _invert_pose(pose_result["transform_curr_prev"])
                 self._publish_odometry(rgb_msg)
                 self._publish_delta_odometry(rgb_msg, prev_world_base, self._world_base_pose())
-                self._log_motion_status(pose_result)
             else:
                 if self._should_log_pose():
                     self.get_logger().warn(
@@ -469,11 +461,6 @@ class XFeatRgbdOdometry(Node):
         local_dx = float(delta_local[0, 3])
         local_dy = float(delta_local[1, 3])
         local_yaw = math.atan2(delta_local[1, 0], delta_local[0, 0])
-        self._last_delta_debug = {
-            "dx": local_dx,
-            "dy": local_dy,
-            "dyaw_deg": math.degrees(local_yaw),
-        }
         quat = _rotation_matrix_to_quaternion(
             np.array(
                 [
@@ -497,30 +484,6 @@ class XFeatRgbdOdometry(Node):
         odom.pose.pose.orientation.z = float(quat[2])
         odom.pose.pose.orientation.w = float(quat[3])
         self._delta_odom_pub.publish(odom)
-
-    def _log_motion_status(self, pose_result: dict) -> None:
-        if not self._should_log_pose():
-            return
-        position = self._world_base_pose()[:3, 3].astype(np.float64)
-        delta = position - self._last_logged_translation
-        moving = float(np.linalg.norm(delta[:2])) > 0.005
-        self._last_logged_translation = position.copy()
-        dx = self._last_delta_debug["dx"]
-        dy = self._last_delta_debug["dy"]
-        dyaw_deg = self._last_delta_debug["dyaw_deg"]
-
-        self.get_logger().info(
-            "Motion %s | delta dx=%.3f dy=%.3f dyaw=%.1fdeg | matches=%d inliers=%d"
-            % (
-                "MOVING" if moving else "STABLE",
-                dx,
-                dy,
-                dyaw_deg,
-                pose_result["num_matches"],
-                pose_result["num_inliers"],
-            ),
-            throttle_duration_sec=0.5,
-        )
 
     def _should_log_pose(self) -> bool:
         if self._control_mode != "nav":

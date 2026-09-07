@@ -58,6 +58,34 @@ def _stamp_sec(header) -> float:
     return float(header.stamp.sec) + float(header.stamp.nanosec) * 1e-9
 
 
+def _is_stationary(
+    linear_x: float,
+    linear_y: float,
+    angular_z: float,
+    max_linear_speed: float,
+    max_angular_speed: float,
+) -> bool:
+    """Return whether planar odometry is within the stationary thresholds."""
+    return (
+        math.hypot(linear_x, linear_y) <= max_linear_speed
+        and abs(angular_z) <= max_angular_speed
+    )
+
+
+def _stationary_f1_gate(
+    enabled: bool,
+    stationary: bool,
+    previous_f1: Optional[float],
+    current_f1: float,
+) -> tuple[bool, Optional[float]]:
+    """Allow only strictly improving F1 values within one stationary period."""
+    if not enabled or not stationary:
+        return True, None
+    if previous_f1 is not None and current_f1 <= previous_f1:
+        return False, previous_f1
+    return True, current_f1
+
+
 class OrbMapMatcher(Node):
     def __init__(self) -> None:
         super().__init__("orb_map_matcher")
@@ -77,6 +105,9 @@ class OrbMapMatcher(Node):
         self.declare_parameter("match_event_topic", "/orb/match_event")
         self.declare_parameter("odom_history_sec", 10.0)
         self.declare_parameter("max_scan_odom_sync_sec", 0.15)
+        self.declare_parameter("stationary_f1_gate_enabled", True)
+        self.declare_parameter("stationary_linear_speed_mps", 0.02)
+        self.declare_parameter("stationary_angular_speed_degps", 1.0)
 
         map_yaml = str(self.get_parameter("map_yaml_path").value)
         if not map_yaml:
@@ -99,6 +130,16 @@ class OrbMapMatcher(Node):
         self._odom_history_sec = float(self.get_parameter("odom_history_sec").value)
         self._max_scan_odom_sync_sec = float(
             self.get_parameter("max_scan_odom_sync_sec").value)
+        self._stationary_f1_gate_enabled = bool(
+            self.get_parameter("stationary_f1_gate_enabled").value)
+        self._stationary_linear_speed = max(
+            0.0,
+            float(self.get_parameter("stationary_linear_speed_mps").value),
+        )
+        self._stationary_angular_speed = math.radians(max(
+            0.0,
+            float(self.get_parameter("stationary_angular_speed_degps").value),
+        ))
 
         # ---- 加载地图 ----
         self._map_image, self._map_origin, self._map_pose_offset = self._load_map(map_yaml)
@@ -112,6 +153,7 @@ class OrbMapMatcher(Node):
         self._match_count = 0
         self._success_count = 0
         self._enabled = True
+        self._stationary_f1_reference: Optional[float] = None
 
         # ---- 订阅 ----
         self._scan_sub = self.create_subscription(
@@ -135,6 +177,7 @@ class OrbMapMatcher(Node):
             f"ORB 持续匹配就绪: 每 {self._period}s, "
             f"max_iter={self._max_iter}, min_f1={self._min_f1}, "
             f"local_radius={self._local_search_radius_m:.2f}m, "
+            f"stationary_f1_gate={self._stationary_f1_gate_enabled}, "
             f"output={self._match_pose_topic}"
         )
 
@@ -177,6 +220,15 @@ class OrbMapMatcher(Node):
 
     def _odom_cb(self, msg: Odometry) -> None:
         self._latest_odom = msg
+        twist = msg.twist.twist
+        if not _is_stationary(
+            twist.linear.x,
+            twist.linear.y,
+            twist.angular.z,
+            self._stationary_linear_speed,
+            self._stationary_angular_speed,
+        ):
+            self._stationary_f1_reference = None
         stamp_sec = _stamp_sec(msg.header)
         self._odom_history.append((stamp_sec, msg))
         oldest_stamp = stamp_sec - self._odom_history_sec
@@ -196,6 +248,7 @@ class OrbMapMatcher(Node):
 
     def _enable_cb(self, request, response):
         self._enabled = request.data
+        self._stationary_f1_reference = None
         response.success = True
         response.message = (
             f"ORB matcher {'已恢复' if self._enabled else '已暂停'}")
@@ -275,6 +328,34 @@ class OrbMapMatcher(Node):
                 f"[{self._match_count}] 匹配置信度不足: F1={f1:.1f} < {self._min_f1:.1f}")
             return
 
+        twist = scan_odom.twist.twist
+        stationary = _is_stationary(
+            twist.linear.x,
+            twist.linear.y,
+            twist.angular.z,
+            self._stationary_linear_speed,
+            self._stationary_angular_speed,
+        )
+        previous_f1 = self._stationary_f1_reference
+        allowed, self._stationary_f1_reference = _stationary_f1_gate(
+            self._stationary_f1_gate_enabled,
+            stationary,
+            previous_f1,
+            f1,
+        )
+        if not allowed:
+            self._publish_match_event(
+                "stationary_f1_rejected",
+                elapsed_ms,
+                f1,
+                previous_f1,
+            )
+            self.get_logger().info(
+                f"[{self._match_count}] 机器人静止，拒绝较低或相同 F1: "
+                f"current={f1:.1f} <= previous={previous_f1:.1f}"
+            )
+            return
+
         self._success_count += 1
         self._publish_match_pose(scan.header, map_x, map_y, map_yaw)
         self._publish_match_event("matched", elapsed_ms, f1)
@@ -317,7 +398,13 @@ class OrbMapMatcher(Node):
         odom.pose.pose.orientation = _quaternion_from_yaw(yaw)
         self._match_pose_pub.publish(odom)
 
-    def _publish_match_event(self, status: str, elapsed_ms: float, f1: float = 0.0) -> None:
+    def _publish_match_event(
+        self,
+        status: str,
+        elapsed_ms: float,
+        f1: float = 0.0,
+        stationary_reference_f1: Optional[float] = None,
+    ) -> None:
         """Publish a structured ORB-attempt event for the experiment logger."""
         stamp_sec = self.get_clock().now().nanoseconds * 1e-9
         event = {
@@ -326,6 +413,7 @@ class OrbMapMatcher(Node):
             "status": status,
             "elapsed_ms": elapsed_ms,
             "f1": f1,
+            "stationary_reference_f1": stationary_reference_f1,
             "timed_out": elapsed_ms > self._match_timeout_sec * 1000.0,
         }
         message = String()
