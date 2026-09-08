@@ -1,0 +1,38 @@
+calibration_version: 1
+calibrated_at: "2026-09-08T15:15:49+08:00"
+
+# The robot base center was placed at physical tile coordinate (0, 0),
+# with the robot forward direction aligned with tile +x (0 degrees).
+source_map_yaml: /home/xu/project/dashgo_ws/install/nav_slam/share/nav_slam/map/2dashgo_slam_map.yaml
+map_frame: map
+tile_frame: tile_origin
+robot_frame: base_footprint
+tile_size_m: 0.604
+
+# Pose of tile_origin in map: map -> tile_origin.
+map_to_tile_origin:
+  x_m: 4.234044862084698
+  y_m: 0.49366355701273534
+  z_m: 0.0
+  yaw_rad: -1.6085637436983355
+  yaw_deg: -92.1639135916781
+  quaternion_xyzw: [0.0, 0.0, -0.7203327144832815, 0.6936287050325608]
+
+# Original occupancy-grid image origin expressed in tile_origin coordinates.
+static_map_image_origin_in_tile:
+  x_m: 4.072422036082662
+  y_m: -6.475850149567814
+  yaw_rad: 1.6085637436983355
+
+capture:
+  source_topic: /odom_in_map
+  stationary_f1_gate_enabled: true
+  orb_stationary_reference_f1: 31.51869820808839
+  duration_sec: 10.0
+  stable_sample_count: 90
+  x_std_m: 1.8724445165742405e-16
+  y_std_m: 1.6550227688315154e-17
+  yaw_std_deg: 0.0
+  x_range_m: 1.7763568394002505e-15
+  y_range_m: 2.220446049250313e-16
+  yaw_range_deg: 0.0

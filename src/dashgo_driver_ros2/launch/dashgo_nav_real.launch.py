@@ -67,7 +67,7 @@ def generate_launch_description():
     resolved_ports = resolve_serial_ports()
     driver_share = get_package_share_directory("dashgo_driver_ros2")
     nav_share_dir = get_package_share_directory("nav_slam")
-    default_nav_map = os.path.join(nav_share_dir, "map", "dashgo_slam_map.yaml")              # 静态地图读取接口
+    default_nav_map = os.path.join(nav_share_dir, "map", "2dashgo_slam_map.yaml")             # 静态地图读取接口
     default_nav_rviz = os.path.join(nav_share_dir, "config", "rviz.rviz")
     default_robot_urdf = os.path.join(driver_share, "urdf", "dashgo_visual.urdf")
 
@@ -125,7 +125,7 @@ def generate_launch_description():
             DeclareLaunchArgument("start_nav_rviz", default_value="true"),
             DeclareLaunchArgument("start_lidar", default_value="true"),
             DeclareLaunchArgument("start_web_ui", default_value="true"),
-            DeclareLaunchArgument("start_hotspot", default_value="false"),
+            DeclareLaunchArgument("start_hotspot", default_value="true"),
             DeclareLaunchArgument("publish_robot_model", default_value="true"),
             DeclareLaunchArgument("driver_port", default_value=resolved_ports["driver_port"]),
             DeclareLaunchArgument(
