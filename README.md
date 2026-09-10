@@ -1,417 +1,273 @@
 # dashgo_ws
 
-基于 ROS 2 Humble 的 Dashgo 真机工作区，包含底盘驱动、RPLIDAR S2、RealSense 相机，以及本地化后的 Voronoi 导航栈。
+基于 ROS 2 Humble 的 Dashgo 真机工作区，主要用于 **激光建图、已有地图上的定位导航，以及定位精度测试**。硬件主链路是 Dashgo 底盘与 RPLIDAR S2；当前导航入口不启动 D435、T265 或 XFeat 视觉里程计。
 
-当前这套工程面向真实机器人联调，不是 Gazebo 仿真工程。
+## 1. 环境与编译
 
-## 功能概览
-
-- 底盘串口驱动
-- RPLIDAR S2 接入
-- RealSense D435 / T265 启动封装
-- 真机一体化启动
-- 手机网页控制面板
-- 本地化导航包
-- `/scan -> /points_raw` 桥接，便于对接当前导航链路
-
-## 工作区结构
-
-```text
-src/
-├── dashgo_driver_ros2        # 底盘驱动与总启动
-├── dashgo_lidar_ros2         # 雷达封装
-├── dashgo_realsense_ros2     # RealSense 封装
-├── dashgo_web_control        # 手机网页控制面板
-├── dashgo_xfeat_bringup      # XFeat 视觉里程计与融合
-├── sllidar_ros2              # 雷达底层驱动
-├── nav_slam                  # 本地化导航节点（含全局定位 + 增强 Pure Pursuit）
-├── nav2_voronoi_planner      # Voronoi 规划器
-├── dynamicvoronoi            # Voronoi 基础库
-└── kidnapped_robot_finder    # ORB 特征匹配全局定位库
-```
-
-## 环境要求
-
-- Ubuntu 22.04
-- ROS 2 Humble
-- `python3-serial`
-- 可访问的底盘串口设备
-- 可访问的雷达串口设备
-
-相机可选依赖：
+使用 Ubuntu 22.04、ROS 2 Humble，底盘和雷达需要串口访问权限。以下命令按本机工作区路径编写；迁移工作区后请调整路径。
 
 ```bash
-sudo apt install ros-humble-realsense2-camera ros-humble-realsense2-description
-```
-
-## 首次使用前建议
-
-### 1. 加入串口权限组
-
-```bash
-sudo usermod -aG dialout $USER
-```
-
-执行后重新登录终端或重启。
-
-### 2. 避免 `brltty` 抢占底盘串口
-
-如果底盘是 `CH340/HL-340`，系统可能被 `brltty` 抢走 `ttyUSB` 设备。
-
-```bash
-sudo systemctl stop brltty.service brltty-udev.service
-sudo systemctl mask brltty.service brltty-udev.service
-```
-
-### 3. 编译工作区
-
-```bash
-cd ~/dashgo_ws
+cd /home/xu/project/dashgo_ws
 source /opt/ros/humble/setup.bash
-colcon build
+rosdep install --from-paths src --ignore-src -r -y
+colcon build --symlink-install
 source install/setup.bash
 ```
 
-### 4. 接线建议
-
-这套真机对 USB 接线比较敏感，实测有如下经验：
-
-- 底盘、雷达、D435 不要都接在同一个无源扩展口或同一个小 Hub 上
-- 如果雷达启动后一瞬间掉线，或报 `RPLidar internal error detected`，优先检查是不是和底盘或相机接在同一路 USB 扩展上
-- 如果启动后一直没有 `/odom`，除了检查串口权限，也要检查底盘是否和雷达共用了同一个扩展接口
-- 更稳妥的做法是：底盘、雷达、相机尽量分散到不同物理接口；如果必须扩展，优先用带独立供电的 USB Hub
-
-## 常用环境命令
+建图需要 `slam_toolbox`，可单独安装：
 
 ```bash
-cd ~/dashgo_ws
+sudo apt install ros-humble-slam-toolbox
+```
+
+每个新终端运行：
+
+```bash
+cd /home/xu/project/dashgo_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 export ROS_LOG_DIR=/tmp/roslogs
 ```
 
-## 快速启动
+底盘和雷达串口会自动识别，识别有误时可通过 `driver_port:=...`、`lidar_port:=...` 指定 `/dev/serial/by-id/` 路径。串口无权限时执行 `sudo usermod -aG dialout "$USER"`，然后重新登录。
 
-默认推荐把机器人固定热点一起打开，这样手机直接连接机器人热点，再扫码进入网页控制。
+## 2. 激光建图
 
-当前 `dashgo_robot.launch.py` 和 `dashgo_nav_real.launch.py` 已支持自动识别底盘串口和雷达串口。
-
-- 底盘优先识别 CH340/CH341 控制板
-- 雷达优先识别 CP210x 串口设备
-- 优先使用 `/dev/serial/by-id/` 这类更稳定的路径
-- 换电脑或 `ttyUSB0/1` 顺序变化时，常用总启动命令通常不需要改
-- 如果机器上同时插了多块类似 USB 串口设备，仍然可以手动传 `driver_port:=...` 或 `lidar_port:=...`
-
-### 推荐命令
-
-完整导航（全局定位 + XFeat + 增强 Pure Pursuit + 网页控制）：
+### 启动
 
 ```bash
-cd ~/dashgo_ws
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-export ROS_LOG_DIR=/tmp/roslogs
-ros2 launch dashgo_xfeat_bringup dashgo_nav_xfeat_odometry.launch.py
+ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py use_slam:=true
 ```
 
-这条命令会同时启动：
+该模式启动底盘、雷达、`slam_toolbox`、建图桥接、网页控制和 RViz，跳过静态地图服务与 ORB 定位节点。`slam_toolbox` 使用 `/scan` 和里程计 TF，发布 `/slam_map` 与 `map → odom`。
 
-- 底盘
-- 雷达
-- D435 相机
-- XFeat 视觉里程计
-- Odom 融合节点
-- 全局定位（ORB 匹配 PGM 静态地图 → 锁定 map→odom TF）
-- Voronoi 骨架规划器
-- 代价地图（静态地图 + 实时激光障碍物叠加）
-- 增强 Pure Pursuit 路径跟踪
-- 网页控制
-- RViz
+当前建图配置为 0.05 m 栅格、2 s 地图更新周期、12 m 最大激光距离，并开启回环检测。参数在 `src/nav_slam/config/slam_toolbox_params.yaml` 中；修改后重新编译 `nav_slam` 并重启。
 
-如果只需要基础导航（无 XFeat 视觉修正、无全局定位，回退到纯 SLAM 模式）：
+### 操作与保存
+
+1. 打开机器人控制网页 `http://<机器人IP>:8080`，进入“建图模式”，点击“开始建图”。
+2. 使用建图页面摇杆低速移动，覆盖走廊、转角和房间，并回到走过的区域检查闭环。此时 `slam_controller` 将 `/slam_map` 转发到 `/combined_grid` 供网页显示。
+3. 停稳后点击“保存地图”，以保存返回消息中的实际路径为准。
+4. 结束建图后用 `Ctrl+C` 停止启动进程，再按下一节加载保存的地图进行定位导航。
+
+也可以在另一个已加载环境的终端操作：
 
 ```bash
-ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py start_hotspot:=true use_static_map:=false
+# 切换到建图显示模式
+ros2 topic pub --once /control_mode std_msgs/msg/String "{data: mapping}"
+
+# 保存当前地图，检查返回的 success 与实际路径
+ros2 service call /slam_controller/save_map std_srvs/srv/Trigger '{}'
 ```
 
-### 常用变体
+**保存行为：** 当前后端固定保存为 `dashgo_slam_map.pgm` 和 `dashgo_slam_map.yaml`，同目录重复保存会覆盖。网页“地图名称”尚未传递到实际保存逻辑。默认保存目录根据运行中的 Python 包路径推导，可能位于源码或安装目录；需要保留多个版本时，将返回路径中的 PGM、YAML 一起复制到独立目录。修改文件名时同步修改 YAML 的 `image` 字段。
+
+网页“开始/停止建图”切换控制模式和地图转发，不会启动或关闭 `slam_toolbox`，也不会清空已有建图结果。必须先用 `use_slam:=true` 启动建图进程。
+
+## 3. 已有地图定位与导航
+
+### 启动
 
 ```bash
-# 不使用静态地图（纯 SLAM 模式，机器人从原点出发）
-ros2 launch dashgo_xfeat_bringup dashgo_nav_xfeat_odometry.launch.py use_static_map:=false
-
-# 不启动相机
-ros2 launch dashgo_xfeat_bringup dashgo_nav_xfeat_odometry.launch.py start_d435:=false
-
-# 不启动 RViz
-ros2 launch dashgo_xfeat_bringup dashgo_nav_xfeat_odometry.launch.py start_nav_rviz:=false
-
-# 使用自定义地图
-ros2 launch dashgo_xfeat_bringup dashgo_nav_xfeat_odometry.launch.py nav_map_yaml:=/path/to/map.yaml
-
-# 基础导航模式（无 XFeat，底盘直驱）
-ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py start_hotspot:=true use_static_map:=false
+ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py
 ```
 
-## 其他启动方式
-
-以下命令默认沿用上面的“常用环境命令”环境。
-
-### XFeat 导航与调试
-
-当前 Dashgo 这边可直接使用的 XFeat 相关命令：
-
-```bash
-# Dashgo 真机完整导航（含全局定位 + XFeat 视觉修正 + 增强 Pure Pursuit）
-ros2 launch dashgo_xfeat_bringup dashgo_nav_xfeat_odometry.launch.py
-
-# 只起 D435 + XFeat 原生 RGB-D 里程计
-ros2 launch dashgo_xfeat_bringup real_d435_only_xfeat_odometry.launch.py
-```
-
-完整导航架构说明：
-
-- **全局定位**：启动时 `lidar_global_localize` 用 ORB 特征匹配将 `/scan` 与 PGM 静态地图对齐，锁定 `map→odom` TF
-- **里程融合**：底盘 `/odom` 为主，`XFeat` 增量（`/xfeat/delta_odom`）做轻量修正
-- **里程分离**：建图用 `/localized_odom`，规划/控制用 `/odom_in_map`（map 帧）
-- 终端状态会打印 `base_only` / `fused` / `rejected`
-
-常用启动参数：
-
-```bash
-# 不使用静态地图（纯 SLAM 模式，从原点启动）
-ros2 launch dashgo_xfeat_bringup dashgo_nav_xfeat_odometry.launch.py use_static_map:=false
-
-# 关闭点云障碍物叠加（只用静态地图）
-ros2 launch dashgo_xfeat_bringup dashgo_nav_xfeat_odometry.launch.py use_pointcloud_obstacles:=false
-
-# 使用自定义地图
-ros2 launch dashgo_xfeat_bringup dashgo_nav_xfeat_odometry.launch.py nav_map_yaml:=/path/to/your_map.yaml
-```
-
-如果要看融合调试表格，默认位置是：
-
-```bash
-/home/xu/xfeat_pose/real_odom_fusion_debug.csv
-```
-
-### 底盘单独启动
-
-```bash
-ros2 launch dashgo_driver_ros2 dashgo_robot.launch.py start_lidar:=false start_d435:=false
-```
-
-### 雷达单独启动
-
-```bash
-ros2 launch dashgo_lidar_ros2 rplidar_s2.launch.py
-```
-
-说明：
-
-- 这条“单独启动雷达”现在也支持自动识别雷达串口
-- 日常仍然更推荐使用 `dashgo_robot.launch.py` 或 `dashgo_nav_real.launch.py` 做整机启动
-
-### 单独启动手机网页控制
-
-```bash
-ros2 launch dashgo_web_control web_control.launch.py
-```
-
-### 单独启动手机网页控制，同时开启固定热点
-
-```bash
-ros2 launch dashgo_web_control web_control.launch.py start_hotspot:=true
-```
-
-### 自定义热点名和密码
+默认加载安装包内的 `nav_slam/map/2dashgo_slam_map.yaml`。使用新建地图时显式指定 YAML 的绝对路径，例如：
 
 ```bash
 ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py \
-  start_hotspot:=true \
-  hotspot_ssid:=Dashgo-Robot \
-  hotspot_password:=dashgo12345
+  nav_map_yaml:=/home/xu/project/dashgo_ws/src/nav_slam/map/dashgo_slam_map.yaml
 ```
 
-如果你换了电脑，或者这块移动硬盘插到另一台机器上，网卡名可能会从 `wlp13s0` 变成别的值。这种情况下通常不用改命令，因为程序会自动找可用 Wi-Fi 网卡。
+上例适用于地图确实保存在该位置的情况；否则换成保存服务返回位置对应的 YAML 路径。YAML 引用的 PGM 必须存在。
 
-只有在下面两种情况，才建议手动指定 `hotspot_ifname`：
+启动后先保持机器人静止，观察初始定位结果，确认 RViz 中机器人位置、朝向及激光与墙体一致，再在网页导航页面“选点导航”并“确认导航”。需要遥控时切换手动模式，需要中断运动时使用暂停。
 
-- 机器上同时有多块无线网卡，自动选择到了错误网卡
-- 你明确知道要固定使用某一块无线网卡
-
-手动指定示例：
-
-```bash
-ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py start_hotspot:=true hotspot_ifname:=wlp13s0
-```
-
-## 常用检查命令
-
-```bash
-ros2 topic list
-ros2 topic echo /scan --once
-ros2 topic echo /odom --once
-ros2 topic echo /cmd_vel --once
-ros2 topic echo /imu_angle --once
-ros2 topic echo /imu_angles_raw --once
-ros2 topic echo /imu/data --once
-ros2 topic echo /points_raw --once
-ros2 topic echo /combined_grid --once
-ros2 topic echo /path --once
-ros2 topic echo /control_mode --once
-```
-
-## 话题链路说明
-
-真实机器人导航当前链路如下：
-
-### 传感器层
-
-- 底盘发布 `/odom`（轮式里程计）
-- 雷达发布 `/scan`
-- D435 发布 RGB-D 图像 `/camera/camera/color/image_raw`、`/camera/camera/aligned_depth_to_color/image_raw`
-- `dashgo_driver_ros2` 额外发布底盘 IMU 角度 `/imu_angle`、原始双值 `/imu_angles_raw`，以及标准 IMU `/imu/data`
-
-### 全局定位（初始阶段）
-
-- `static_map_server` 读取 PGM+YAML 静态地图 → 发布 `/map`
-- `lidar_global_localize` 用 ORB 特征匹配将 `/scan` 与 PGM 静态地图对齐 → 锁定 `map→odom` 静态 TF（真实偏移，非 identity）
-- `map_once_relay` 将 `/map` 首帧以 transient_local QoS 转发到 `/map_for_amcl`
-
-### Odom 融合
-
-- `xfeat_rgbd_odometry` 用 XFeat 做前后帧匹配 + PnP → 发布 `/xfeat/odom` + `/xfeat/delta_odom`（局部增量）
-- `odom_fusion_node` 融合底盘 `/odom` + XFeat `/xfeat/delta_odom` → 发布 `/localized_odom`
-
-### 坐标变换（TF 树）
-
-```
-map ──(lidar_global_localize, 静态)──→ odom ──(odom_tf_bridge, 读 /localized_odom)──→ base_footprint
-```
-
-- `lidar_global_localize` 在启动时用 ORB 匹配锁定 `map→odom` TF（一次性）
-- `odom_tf_bridge` 持续读取 `/localized_odom` 发布 `odom→base_footprint` TF
-- `odom_map_tf` 发布 `map→odom` identity TF 作为 fallback（无静态地图时）
-- `odom_to_map_relay` 将 `/localized_odom` 变换到 map 帧 → 发布 `/odom_in_map`
-
-### 导航层
-
-- 激光扫描两条路径进入栅格地图：
-  - `scan_to_points_node` → `/points_raw` (base_link 帧) → `points_pub_map` → `/mapokk` (map 帧)
-  - `laser_scan_to_points` → 直接将 `/scan` 转到 map 帧 → `/mapokk`
-- `map_pub` 合并静态地图 + 实时点云障碍物 + 动态障碍物 → 发布 `/combined_grid`（建图里程计用 `/localized_odom`）
-- `voronoi_node` 基于 `/combined_grid` + `/odom_in_map` 生成 Voronoi 骨架路径 → 发布 `/path`
-- `start_nav` 增强 Pure Pursuit 控制器读取 `/odom_in_map` + `/path` + `/combined_grid` → 发布 `/cmd_vel`
-- `dashgo_driver_ros2` 接收 `/cmd_vel` 控制底盘
-
-### 增强 Pure Pursuit 特性（start_nav）
-
-- 可见性检查：查询 `/combined_grid` 确保前视目标点无遮挡
-- CTE（Cross-Track Error）Stanley 修正：根据横向偏差自动回正
-- 曲率前馈速度控制：大弯自动减速
-- 卡死检测与恢复：8 秒无进度 → 倒车 1.2s → 原地转向 2.0s → 恢复跟踪
-- 阻塞爬行：前方被遮挡时 0.05m/s 慢速爬行探测
-- 原地转向滞回：进入阈值 1.2rad / 退出阈值 0.4rad，防止掉头画弧
-
-### 网页控制
-
-- `dashgo_web_control` 通过网页提供模式切换、手动遥控和目标下发
-- 控制模式 (`/control_mode`)：`nav`（导航）/ `manual`（手动）/ `pause`（暂停）
-
-### 里程计分离原则
-
-| 用途 | 里程计来源 | 说明 |
-|------|-----------|------|
-| 建图 (map_pub) | `/localized_odom` | 融合了 XFeat 视觉修正，位姿更准 |
-| 规划 (voronoi) | `/odom_in_map` | map 帧，与全局地图对齐 |
-| 控制 (start_nav) | `/odom_in_map` | map 帧，与规划器坐标系一致 |
-| TF (odom_tf_bridge) | `/localized_odom` | RViz 中机器人位置与控制位置一致 |
-
-## 当前限制
-
-- 全局定位依赖预先建好的 PGM+YAML 静态地图，无地图时回退到纯 SLAM 模式（`map→odom`=identity，机器人从原点启动）
-- 不是标准 Nav2 的 `amcl` / `slam_toolbox` 全套定位导航方案
-- `lidar_global_localize` 的 ORB 匹配在环境特征稀疏时可能定位失败
-
-## 手机网页控制说明
-
-默认使用 `dashgo_nav_real.launch.py` 时，会同时启动网页控制节点，默认地址为：
+### 当前定位导航链路
 
 ```text
-http://<机器人IP>:8080
+底盘 /odom ── odom_tf_bridge ── odom → base_footprint
+雷达 /scan ── scan_to_points ── /scan_filtered
+静态地图 YAML + PGM ── static_map_server ── /map
+
+/scan_filtered + 静态地图
+  ├─ lidar_global_localize ── 初始匹配 /lidar_global/match_pose
+  └─ orb_map_matcher ──────── 持续匹配 /orb/match_pose
+                ↓
+       map_odom_corrector ── map → odom
+                ↓
+/odom ── odom_to_map_relay ── /odom_in_map
+
+/scan_filtered ── laser_scan_to_points ── /mapokk
+静态地图 + 实时障碍物 ── map_pub ── /combined_grid
+/combined_grid + /odom_in_map ── voronoi_node ── /path
+/path + /odom_in_map + /combined_grid ── start_nav ── /cmd_vel
 ```
 
-当前网页控制逻辑如下：
+`map_odom_corrector` 统一发布 `map → odom`，根据初始定位与持续 ORB 观测进行校正，包含观测时间对齐、一致性判断及校正速度限制。当前不再采用“初始定位后永久锁定静态 TF”的说明。
 
-- 页面分为“导航页面”和“手动页面”，通过顶部按钮切换
-- 导航页面保留地图、居中/刷新、选点与确认导航
-- 手动页面只保留相机、摇杆和基础状态
-- 导航不会因为误触立即开始，必须先“选点导航”，再点击“确认导航”
-- 手动模式下才能通过摇杆发送速度指令，导航模式下摇杆会被禁用
-- 地图支持鼠标滚轮缩放、双指缩放，以及拖拽平移
-- 网页相机默认读取 `/camera/camera/color/image_raw`
-- D435 相机本身不是靠固定 `/dev/videoX` 启动，而是由 `realsense2_camera` 自动发现设备
+规划采用 Voronoi，跟踪由 `start_nav` 实现，属于自定义导航链路。ORB 在这里用于激光栅格与静态地图匹配，不依赖相机图像。建图模式下 `map → odom` 由 `slam_toolbox` 提供。
 
-### 二维码弹窗
+### 常用参数
 
-启动网页控制后，桌面环境下会自动弹出二维码窗口。
-
-- README 默认推荐使用 `start_hotspot:=true`
-- 带 `start_hotspot:=true` 启动时，弹窗会显示两个二维码
-- 左侧二维码用于手机连接机器人热点
-- 右侧二维码用于打开控制网页
-- 不带热点启动时，只显示“打开网页”二维码
-
-如果没有图形界面，程序会自动退回到终端打印网页二维码。
-
-### 机器人固定热点说明
-
-当前已经支持由机器人 Ubuntu 22 自己创建固定热点。
-
-- README 默认把固定热点作为推荐启动方式
-- 代码默认值仍然是 `start_hotspot:=false`，所以命令里要显式带上 `start_hotspot:=true`
-- 启动参数 `start_hotspot:=true` 后，会先自动打开 Wi-Fi，再拉起热点
-- 默认会自动选择当前可用的无线网卡，不依赖固定网卡名
-- 默认连接名为 `dashgo-hotspot`
-- 默认热点名为 `Dashgo-Robot`
-- 默认密码为 `dashgo12345`
-- 若你手动关闭过热点，下次重新启动 launch 时会自动重新打开 Wi-Fi 并恢复热点
-
-注意：
-
-- 手机通常需要先扫“连接热点”二维码加入 Wi-Fi，再扫“打开网页”二维码进入控制页
-- 不能稳定地用一个二维码同时完成“自动连 Wi-Fi + 自动打开网页”两件事
-- 热点启动依赖 NetworkManager 的 `nmcli`
-
-如果修改了 `src/dashgo_web_control/web/` 下的前端文件，记得重新编译：
+| 参数 | 默认值 | 用途 |
+| --- | --- | --- |
+| `use_slam` | `false` | `true` 时启用在线建图 |
+| `nav_map_yaml` | 包内 `2dashgo_slam_map.yaml` | 定位导航使用的静态地图 |
+| `use_global_localize` | `true` | 初始定位和地图坐标校正 |
+| `use_continuous_orb` | `true` | 持续 ORB 地图匹配 |
+| `orb_match_period_sec` | `2.0` | 持续匹配周期，秒 |
+| `orb_required_consistent_matches` | `2` | 校正所需的一致观测数 |
+| `use_pointcloud_obstacles` | `true` | 将实时激光障碍物叠加到导航栅格 |
+| `use_dynamic_obstacle_points` | `false` | 额外动态障碍物点输入 |
+| `goal_relocalization_enabled` | `false` | 到达目标后触发重定位 |
+| `map_odom_topic` | `/odom` | TF 与地图校正使用的里程计 |
+| `control_odom_topic` | `/odom_in_map` | 地图坐标系下的控制位姿 |
+| `start_nav_rviz` | `true` | 启动 RViz |
+| `start_web_ui` | `true` | 启动网页控制 |
+| `start_hotspot` | `true` | 启动机器人 Wi-Fi 热点 |
 
 ```bash
-cd ~/dashgo_ws
-source /opt/ros/humble/setup.bash
-colcon build --packages-select dashgo_web_control
-source install/setup.bash
+# 使用现有网络，不创建热点；无图形界面时关闭 RViz
+ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py \
+  start_hotspot:=false start_nav_rviz:=false
+
+# 对照测试：保留初始定位，关闭持续 ORB 更新
+ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py use_continuous_orb:=false
+
+# 查看启动参数
+ros2 launch dashgo_driver_ros2 dashgo_nav_real.launch.py --show-args
 ```
 
-## 相关入口文件
+`use_static_map:=false` 仅控制 `map_pub` 是否使用静态底图，**不等于开启 SLAM**，也不会自动关闭静态地图服务或全局定位。建图使用 `use_slam:=true`。
 
-- [真实机器人总启动（含全局定位 + XFeat）](./src/dashgo_xfeat_bringup/launch/dashgo_nav_xfeat_odometry.launch.py)
-- [真实机器人导航启动](./src/dashgo_driver_ros2/launch/dashgo_nav_real.launch.py)
-- [底盘总启动](./src/dashgo_driver_ros2/launch/dashgo_robot.launch.py)
-- [底盘驱动](./src/dashgo_driver_ros2/dashgo_driver_ros2/dashgo_driver_node.py)
-- [雷达桥接](./src/dashgo_driver_ros2/dashgo_driver_ros2/scan_to_points_node.py)
-- [全局定位（ORB 匹配）](./src/nav_slam/nav_slam/lidar_global_localize.py)
-- [静态地图服务](./src/nav_slam/nav_slam/static_map_server.py)
-- [代价地图发布](./src/nav_slam/nav_slam/map_pub.py)
-- [增强 Pure Pursuit 控制器](./src/nav_slam/nav_slam/start_nav.py)
-- [里程融合节点](./src/dashgo_xfeat_bringup/dashgo_xfeat_bringup/odom_fusion_node.py)
-- [XFeat 视觉里程计](./src/dashgo_xfeat_bringup/dashgo_xfeat_bringup/xfeat_rgbd_odometry.py)
-- [网页控制节点](./src/dashgo_web_control/dashgo_web_control/web_control_node.py)
-- [网页控制前端](./src/dashgo_web_control/web/index.html)
-- [导航地图](./src/nav_slam/map/gpt.yaml)
+旧入口 `dashgo_xfeat_bringup/dashgo_nav_xfeat_odometry.launch.py` 当前只转发到上述导航入口，不启动视觉融合。单独的 XFeat、RealSense 和 RGB-D 录制工具仍保留在对应包中。
 
-## 备注
+## 4. 测试与验收
 
-- 雷达在 RViz 中显示时，`LaserScan` 的 QoS 建议设为 `Best Effort`
-- 若 RViz 出现 TF 时间外推，可先将 `Fixed Frame` 设为 `base_footprint` 或 `laser`
-- `dashgo_nav_real.launch.py` 当前默认 `start_d435:=true`、`start_web_ui:=true`
+### 4.1 话题和 TF 检查
+
+在启动建图或定位导航之后，于另一个终端执行：
+
+```bash
+ros2 node list
+ros2 topic hz /scan
+ros2 topic hz /odom
+```
+
+`topic hz` 持续运行，每项检查后按 `Ctrl+C` 再执行下一项。
+
+```bash
+ros2 run tf2_ros tf2_echo odom base_footprint
+ros2 run tf2_ros tf2_echo map base_footprint
+```
+
+TF 检查同样按 `Ctrl+C` 结束。定位导航时还应检查：
+
+```bash
+ros2 topic echo /odom_in_map --once
+ros2 topic echo /orb/match_event --once
+ros2 topic echo /control_mode --once
+ros2 topic info /combined_grid
+ros2 topic info /path
+```
+
+建图时检查 `/slam_map`；网页开始建图后检查 `/combined_grid` 是否更新。定位时检查静态地图与激光是否对齐。ORB 匹配事件仅代表匹配节点的观测情况，最终是否采用校正还需结合 `map_odom_corrector` 日志和实际 TF 判断。
+
+### 4.2 瓷砖坐标定位精度测试
+
+现有脚本 `calibration/record_tile_localization_accuracy.py` 采集 `/odom_in_map`，利用标定 YAML 将地图位姿转换为瓷砖坐标，并与手工测量的真实位置、朝向比较。
+
+测试前确认：
+
+- 已在静态地图上完成定位，机器人保持静止。
+- 使用与本次地图、物理瓷砖原点及坐标轴一致的标定文件；地图或原点改变后需要重新标定。
+- 真实位置以机器人底盘中心为准，输入的是瓷砖编号，朝向单位为度。现有标定的瓷砖边长为 0.604 m，具体以 YAML 为准。
+
+```bash
+# 示例：真实位置 (2, 3) 块瓷砖，朝向 90°；请换成实际测量值
+python3 calibration/record_tile_localization_accuracy.py 2 3 90 \
+  --duration 10 \
+  --calibration calibration/tile_origin_20260908_151549.yaml \
+  --output calibration/localization_test.csv \
+  --note "静止定位，第1轮"
+```
+
+也可不传位置参数，按提示交互输入：
+
+```bash
+python3 calibration/record_tile_localization_accuracy.py \
+  --calibration calibration/tile_origin_20260908_151549.yaml
+```
+
+未指定 `--calibration` 时按修改时间选择最新 `tile_origin_*.yaml`；对照测试应显式指定文件，避免误用。标定内 `source_map_yaml` 必须指向存在的地图。脚本会核对 `/map` 的分辨率与原点 x/y，但不比较完整地图内容，仍需自行确认地图版本。
+
+每次运行向 CSV 追加一个测试点，包含位置误差、朝向误差、采样标准差与极差，以及相同标定文件名下累计的位置/角度 MAE、RMSE 和最大误差。未指定输出时保存为 `calibration/orb_tile_localization_evaluation_<标定文件名去扩展名>.csv`。
+
+建议在不同位置、朝向重复测试，分别记录初始定位、行驶后停稳和关闭持续 ORB 的结果，并为不同配置使用不同 CSV。静止采样波动小只说明输出稳定，绝对精度仍要看与真实位置的偏差。仓库已有 CSV 是历史测量记录，不代表本次运行结果。
+
+### 4.3 导航实机测试
+
+| 测试项目 | 操作 | 记录内容 |
+| --- | --- | --- |
+| 建图闭环 | 绕环境一圈回到起点并保存 | 墙体重影、地图完整性、保存路径及重新加载结果 |
+| 初始定位 | 在多个已知位置和朝向重新启动 | 成功/失败、定位耗时、位置与角度误差 |
+| 定点导航 | 测试直线、转角、窄通道目标 | 成功率、耗时、终点误差 |
+| 障碍物响应 | 在路径前方放置障碍物 | 栅格更新、路径变化、停车或绕行情况 |
+| 模式切换 | 导航中暂停，再切换手动 | 是否停止、是否残留运动指令 |
+| 重复往返 | 在同一组目标之间多轮行驶 | 定位漂移、失败位置、恢复情况 |
+
+需要保留复现数据时，可在导航期间录制：
+
+```bash
+ros2 bag record -o /tmp/dashgo_nav_test \
+  /scan /scan_filtered /odom /odom_in_map /tf /tf_static \
+  /map /combined_grid /path /cmd_vel /control_mode \
+  /lidar_global/match_pose /orb/match_pose /orb/match_event
+```
+
+使用未存在的输出目录；结束后按 `Ctrl+C`。建图记录可另外加入 `/slam_map`。同时保存启动命令、地图和标定版本，便于比较结果。
+
+### 4.4 离线回归测试
+
+以下测试不需要启动底盘，但需要已加载 ROS 环境及 Python 依赖。在工作区根目录执行：
+
+```bash
+PYTHONPATH="$PWD/src/nav_slam:$PWD/src/kidnapped_robot_finder:$PWD/src/dashgo_xfeat_bringup:$PYTHONPATH" \
+python3 -m pytest -q \
+  src/nav_slam/test/test_map_odom_corrector_math.py \
+  src/nav_slam/test/test_laser_scan_deskew_math.py \
+  src/nav_slam/test/test_orb_map_matcher_gate.py \
+  src/kidnapped_robot_finder/test/test_kidnap_solver_coordinates.py \
+  src/kidnapped_robot_finder/test/test_scanner_unknown_space.py \
+  src/dashgo_xfeat_bringup/test/test_imu_yaw_fusion.py
+```
+
+覆盖地图校正数学逻辑、激光去畸变插值、ORB 门限、地图坐标转换、未知栅格处理和独立融合模块的 IMU 角度判断。通过这些测试不能替代实机建图与导航验收。
+
+## 5. 常见问题
+
+- **建图页面没有地图：** 确认启动命令带 `use_slam:=true`，收到 `/slam_map`，并已点击“开始建图”进入 `mapping` 模式。
+- **地图已保存但导航还是旧地图：** 默认加载的是 `2dashgo_slam_map.yaml`；保存新图不会自动替换导航地图，请重启并显式传 `nav_map_yaml`。
+- **定位错误或激光与墙体不对齐：** 核对地图版本、初始匹配结果、雷达安装 TF；重复结构和特征稀疏区域可能出现歧义。
+- **没有 `/odom` 或雷达掉线：** 检查串口权限、自动识别结果及 USB 供电，必要时手动指定设备路径。
+- **网页相机为空：** 当前导航入口不启动相机，不影响激光建图与定位导航。
+- **不需要热点：** 传 `start_hotspot:=false`。默认热点为 `Dashgo-Robot`，密码为 `dashgo12345`，可用 `hotspot_ssid`、`hotspot_password` 修改；热点依赖 NetworkManager 的 `nmcli`。
+- **RViz 看不到激光：** 将 LaserScan 的 Reliability 设为 Best Effort；地图显示使用 `map` 坐标系并确认相关 TF 存在。
+
+## 6. 主要代码位置
+
+| 路径 | 内容 |
+| --- | --- |
+| `src/dashgo_driver_ros2/launch/dashgo_nav_real.launch.py` | 建图与定位导航统一入口 |
+| `src/nav_slam/launch/slam_mapping.launch.py` | slam_toolbox 建图子系统 |
+| `src/nav_slam/config/slam_toolbox_params.yaml` | 建图参数 |
+| `src/nav_slam/nav_slam/slam_controller.py` | 地图转发与保存服务 |
+| `src/nav_slam/nav_slam/lidar_global_localize.py` | 初始全局定位 |
+| `src/nav_slam/nav_slam/orb_map_matcher.py` | 持续 ORB 匹配 |
+| `src/nav_slam/nav_slam/map_odom_corrector.py` | map → odom 统一校正 |
+| `src/nav_slam/nav_slam/map_pub.py` | 静态地图与实时障碍物合成 |
+| `src/nav2_voronoi_planner` | Voronoi 路径规划 |
+| `src/nav_slam/nav_slam/start_nav.py` | 路径跟踪控制 |
+| `src/dashgo_web_control` | 网页建图、遥控与导航 |
+| `calibration` | 瓷砖坐标标定、定位精度采集脚本与历史结果 |
