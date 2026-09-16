@@ -28,7 +28,7 @@ slam_toolbox:
     minimum_travel_distance: 0.3
     minimum_travel_heading: 0.3
     scan_buffer_size: 15
-    scan_buffer_max_scan_distance: 16.0
+    scan_buffer_maximum_scan_distance: 16.0
 
     # Loop closure
     do_loop_closing: true

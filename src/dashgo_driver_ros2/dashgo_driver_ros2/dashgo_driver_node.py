@@ -61,6 +61,19 @@ IMU_LINEAR_ACCELERATION_COVARIANCE_UNKNOWN = [
 ]
 
 
+def encoder_delta(current, previous, encoder_min, encoder_max):
+    """Unwrap one sample interval; encoder_max is the exclusive upper bound."""
+    span = encoder_max - encoder_min
+    low = encoder_min + span * 0.3
+    high = encoder_min + span * 0.7
+    delta = current - previous
+    if current < low and previous > high:
+        delta += span
+    elif current > high and previous < low:
+        delta -= span
+    return delta
+
+
 def normalize_angle_radians(angle):
     while angle > math.pi:
         angle -= 2.0 * math.pi
@@ -313,15 +326,6 @@ class BaseController:
 
         self.encoder_min = int(node.get_parameter("encoder_min").value)
         self.encoder_max = int(node.get_parameter("encoder_max").value)
-        self.encoder_low_wrap = int(
-            self.encoder_min + (self.encoder_max - self.encoder_min) * 0.3
-        )
-        self.encoder_high_wrap = int(
-            self.encoder_min + (self.encoder_max - self.encoder_min) * 0.7
-        )
-        self.l_wheel_mult = 0
-        self.r_wheel_mult = 0
-
         now = self.node.get_clock().now()
         self.then = now
         self.t_delta = Duration(seconds=1.0 / self.rate)
@@ -422,22 +426,11 @@ class BaseController:
             dleft = 0.0
             dright = 0.0
         else:
-            if left_enc < self.encoder_low_wrap and self.enc_left > self.encoder_high_wrap:
-                self.l_wheel_mult += 1
-            elif left_enc > self.encoder_high_wrap and self.enc_left < self.encoder_low_wrap:
-                self.l_wheel_mult -= 1
-
-            if right_enc < self.encoder_low_wrap and self.enc_right > self.encoder_high_wrap:
-                self.r_wheel_mult += 1
-            elif right_enc > self.encoder_high_wrap and self.enc_right < self.encoder_low_wrap:
-                self.r_wheel_mult -= 1
-
-            wrap_span = self.encoder_max - self.encoder_min
-            dleft = (
-                left_enc + self.l_wheel_mult * wrap_span - self.enc_left
+            dleft = encoder_delta(
+                left_enc, self.enc_left, self.encoder_min, self.encoder_max
             ) / self.ticks_per_meter
-            dright = (
-                right_enc + self.r_wheel_mult * wrap_span - self.enc_right
+            dright = encoder_delta(
+                right_enc, self.enc_right, self.encoder_min, self.encoder_max
             ) / self.ticks_per_meter
 
         self.enc_left = left_enc
